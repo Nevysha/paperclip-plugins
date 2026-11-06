@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { ROUTINES, decide, isOverLimit } from "../src/gate.js";
 import manifest from "../src/manifest.js";
-import { parseCredentials, toWindows } from "../src/usage.js";
+import { parseCredentials, toUsageFile, toWindows } from "../src/usage.js";
 
 describe("manifest", () => {
-  it("only asks for the header slot", () => {
-    expect(manifest.capabilities).toEqual(["ui.action.register"]);
+  it("declares a routine for each configurable key", () => {
+    expect(manifest.routines?.map((r: { routineKey: string }) => r.routineKey)).toEqual(ROUTINES.map((r) => r.key));
   });
 });
 
@@ -37,5 +38,42 @@ describe("parseCredentials", () => {
     expect(parseCredentials(file({ accessToken: "t", expiresAt: 500 }), 1000)).toBeNull();
     expect(parseCredentials(file({}), 1000)).toBeNull();
     expect(parseCredentials("not json", 1000)).toBeNull();
+  });
+});
+
+describe("toUsageFile", () => {
+  it("publishes only percentages and times", () => {
+    const windows = toWindows({ five_hour: { utilization: 91, resets_at: "r1" }, seven_day: { utilization: 6, resets_at: "r2" } });
+    expect(toUsageFile({ status: "ok", windows, fetchedAt: "t", stale: false })).toEqual({
+      status: "ok", fetchedAt: "t", stale: false, sessionPercent: 91, sessionResetsAt: "r1", weekPercent: 6, weekResetsAt: "r2",
+    });
+  });
+  it("marks failures as stale with no numbers", () => {
+    expect(toUsageFile({ status: "signed_out", message: "x" })).toMatchObject({ status: "signed_out", stale: true, sessionPercent: null });
+  });
+});
+
+describe("gate", () => {
+  const base = { status: "active", enabled: true, over: false, pausedByGate: false };
+  it("pauses a selected routine over the limit", () => {
+    expect(decide({ ...base, over: true })).toBe("pause");
+  });
+  it("leaves unselected routines alone", () => {
+    expect(decide({ ...base, enabled: false, over: true })).toBeNull();
+  });
+  it("resumes what it paused once usage drops or the routine is unselected", () => {
+    expect(decide({ ...base, status: "paused", pausedByGate: true })).toBe("resume");
+    expect(decide({ ...base, status: "paused", pausedByGate: true, enabled: false, over: true })).toBe("resume");
+    expect(decide({ ...base, status: "paused", pausedByGate: true, over: true })).toBeNull();
+  });
+  it("never resumes a routine paused by hand, or touches an archived one", () => {
+    expect(decide({ ...base, status: "paused" })).toBeNull();
+    expect(decide({ ...base, status: "archived", over: true })).toBeNull();
+  });
+  it("counts session or week, and unknown usage isn't over", () => {
+    expect(isOverLimit({ session: 90, week: 1 }, 90)).toBe(true);
+    expect(isOverLimit({ session: 1, week: 95 }, 90)).toBe(true);
+    expect(isOverLimit({ session: 89, week: null }, 90)).toBe(false);
+    expect(isOverLimit(null, 90)).toBe(false);
   });
 });

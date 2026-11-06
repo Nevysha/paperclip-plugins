@@ -52,3 +52,27 @@ export function parseCredentials(raw: string, now = Date.now()): string | null {
     return null;
   }
 }
+
+export interface PublishedGate {
+  pauseAtPercent: number;
+  routines: Record<string, boolean>;
+}
+
+/** What other local readers get. Percentages, times and gate settings only, so it's safe to leave readable. */
+export function toUsageFile(result: UsageResult, gate?: PublishedGate) {
+  if (result.status !== "ok") {
+    return { status: result.status, fetchedAt: null, stale: true, sessionPercent: null, sessionResetsAt: null, weekPercent: null, weekResetsAt: null, gate };
+  }
+  const session = result.windows.find((w) => w.key === "session");
+  const week = result.windows.find((w) => w.key === "week");
+  return {
+    status: "ok" as const,
+    fetchedAt: result.fetchedAt,
+    stale: result.stale,
+    sessionPercent: session?.usedPercent ?? null,
+    sessionResetsAt: session?.resetsAt ?? null,
+    weekPercent: week?.usedPercent ?? null,
+    weekResetsAt: week?.resetsAt ?? null,
+    gate,
+  };
+}

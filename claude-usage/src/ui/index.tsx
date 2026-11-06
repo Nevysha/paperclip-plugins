@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { usePluginData, type PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
+import { usePluginAction, usePluginData, usePluginToast, type PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
 import type { UsageResult, UsageWindow } from "../usage.js";
 
 const REFRESH_MS = 60 * 1000;
@@ -21,7 +21,7 @@ const panel: CSSProperties = {
   top: "calc(100% + 6px)",
   right: 0,
   zIndex: 50,
-  width: 280,
+  width: 300,
   maxWidth: "calc(100vw - 32px)",
   padding: 12,
   display: "grid",
@@ -57,6 +57,63 @@ function Meter({ window: w }: { window: UsageWindow }) {
   );
 }
 
+type GateView = {
+  pauseAtPercent: number;
+  routines: Array<{ key: string; title: string; enabled: boolean; status: string | null; pausedByGate: boolean }>;
+};
+
+function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }) {
+  const setRoutineEnabled = usePluginAction("setRoutineEnabled");
+  const setPauseAtPercent = usePluginAction("setPauseAtPercent");
+  const toast = usePluginToast();
+  const [percent, setPercent] = useState(String(gate.pauseAtPercent));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setPercent(String(gate.pauseAtPercent)), [gate.pauseAtPercent]);
+
+  const save = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await action();
+    } catch (err) {
+      toast({ title: "Couldn't save that", body: err instanceof Error ? err.message : String(err), tone: "error" });
+      setPercent(String(gate.pauseAtPercent));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 8, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+      <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+        Pause routines at
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <input type="number" min={1} max={100} value={percent} disabled={busy}
+            onChange={(e) => setPercent(e.target.value)}
+            onBlur={() => {
+              if (Number(percent) !== gate.pauseAtPercent) void save(() => setPauseAtPercent({ percent: Number(percent) }));
+            }}
+            style={{ width: 56, padding: "2px 6px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)" }} />
+          %
+        </span>
+      </label>
+      {gate.routines.map((r) => (
+        <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <input type="checkbox" checked={r.enabled} disabled={busy}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              void save(() => setRoutineEnabled({ key: r.key, enabled }));
+            }} />
+          <span style={{ flex: 1 }}>{r.title}</span>
+          {r.status === "paused" ? <span style={muted}>{r.pausedByGate ? "Paused by usage" : "Paused"}</span> : null}
+        </label>
+      ))}
+      <div style={muted}>Checked routines pause when session or weekly usage reaches the limit, and resume when it drops.</div>
+    </div>
+  );
+}
+
 function useNarrow() {
   const query = "(max-width: 640px)";
   const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
@@ -71,14 +128,18 @@ function useNarrow() {
 
 export function ClaudeUsageButton(_props: PluginWidgetProps) {
   const { data, error, refresh } = usePluginData<UsageResult>("usage");
+  const gate = usePluginData<GateView>("gate");
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const narrow = useNarrow();
 
   useEffect(() => {
-    const timer = setInterval(refresh, REFRESH_MS);
+    const timer = setInterval(() => {
+      refresh();
+      gate.refresh();
+    }, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, gate.refresh]);
 
   useEffect(() => {
     if (!open) return;
@@ -119,7 +180,8 @@ export function ClaudeUsageButton(_props: PluginWidgetProps) {
         {text}
       </button>
       {open ? (
-        <div role="dialog" aria-label="Claude subscription usage" style={panel}>
+        <div role="dialog" aria-label="Claude subscription usage"
+          style={narrow ? { ...panel, position: "fixed", top: 64, left: 16, right: 16, width: "auto", maxWidth: "none" } : panel}>
           <strong style={{ fontSize: 13 }}>Claude subscription</strong>
           {problem ? <p role="alert" style={{ ...muted, margin: 0, overflowWrap: "anywhere" }}>{problem}</p> : null}
           {windows.map((w) => <Meter key={w.key} window={w} />)}
@@ -129,6 +191,8 @@ export function ClaudeUsageButton(_props: PluginWidgetProps) {
               {new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
             </div>
           ) : null}
+          {gate.data ? <GateSettings gate={gate.data} refresh={gate.refresh} /> : null}
+          {gate.error ? <p role="alert" style={{ ...muted, margin: 0 }}>{gate.error.message}</p> : null}
         </div>
       ) : null}
     </div>
