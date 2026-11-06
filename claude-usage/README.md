@@ -3,6 +3,8 @@
 A Paperclip plugin that shows your Claude subscription usage in the header, like `/usage` in Claude Code.
 Click it for all windows and reset times.
 
+![The usage button in the header, open on a panel showing session and weekly usage with reset times](docs/usage-panel.png)
+
 The plugin reads the login in `~/.claude/.credentials.json` (or `CLAUDE_CONFIG_DIR`), sends the token only to
 `api.anthropic.com/api/oauth/usage`, and never returns or logs it. Results are cached for 2 minutes. It doesn't
 refresh the login: when the token expires, running `claude` on this machine renews it.
