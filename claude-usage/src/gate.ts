@@ -1,0 +1,48 @@
+export const ROUTINES = [
+  {
+    key: "po-review",
+    title: "Product Owner review",
+    description: "Review the state of the project and decide what's next, following the \"Scheduled reviews\" section of your instructions. Don't start the proposed work.",
+    label: "Every 4 hours",
+    cron: "0 */4 * * *",
+    defaultEnabled: true,
+  },
+  {
+    key: "safety-review",
+    title: "Safety review",
+    description: "Refresh the snapshot, run the safety overview tool and review the report, following the \"Scheduled safety review\" section of your instructions.",
+    label: "Twice a day",
+    cron: "0 8,20 * * *",
+    defaultEnabled: false,
+  },
+] as const;
+
+export type RoutineKey = (typeof ROUTINES)[number]["key"];
+
+export interface GateSettings {
+  pauseAtPercent: number;
+  enabled: Record<string, boolean>;
+  pausedByGate: Record<string, boolean>;
+}
+
+export const DEFAULT_SETTINGS: GateSettings = {
+  pauseAtPercent: 90,
+  enabled: Object.fromEntries(ROUTINES.map((r) => [r.key, r.defaultEnabled])),
+  pausedByGate: {},
+};
+
+export const isRoutineKey = (value: unknown): value is RoutineKey => ROUTINES.some((r) => r.key === value);
+
+export const isOverLimit = (usage: { session: number | null; week: number | null } | null, pauseAtPercent: number) =>
+  usage !== null && Math.max(usage.session ?? 0, usage.week ?? 0) >= pauseAtPercent;
+
+/**
+ * Only resumes routines the gate paused itself, so one you paused by hand stays paused.
+ * Unknown usage counts as not over the limit, so a broken login can't silently stop reviews.
+ */
+export function decide(input: { status: string; enabled: boolean; over: boolean; pausedByGate: boolean }): "pause" | "resume" | null {
+  const shouldPause = input.enabled && input.over;
+  if (input.status === "active" && shouldPause) return "pause";
+  if (input.status === "paused" && input.pausedByGate && !shouldPause) return "resume";
+  return null;
+}
