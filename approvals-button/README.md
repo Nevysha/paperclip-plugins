@@ -4,7 +4,7 @@ A Paperclip plugin that adds an **Approvals** button to the header, with a flag 
 
 It only reads approvals. It can't approve or reject anything.
 
-![The header in dark mode, with an Approvals button showing a red flag with the number 4 next to the usage and Decisions buttons](docs/approvals-button.png)
+![The header in dark mode, with an Approvals button showing a red flag with the number 1 next to the usage and Decisions buttons](docs/approvals-button.png)
 
 ## Development
 

@@ -18,7 +18,7 @@ Claude subscription usage in the header, plus a limit that pauses the routines y
 
 An **Approvals** button in the header, with a flag showing how many are pending, because the app's menus don't link to that page.
 
-![The header in dark mode, with an Approvals button showing a red flag with the number 4 next to the usage and Decisions buttons](approvals-button/docs/approvals-button.png)
+![The header in dark mode, with an Approvals button showing a red flag with the number 1 next to the usage and Decisions buttons](approvals-button/docs/approvals-button.png)
 
 ## Setup
 
