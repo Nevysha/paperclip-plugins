@@ -1,6 +1,6 @@
 {
   "name": "@nevysha/claude-usage",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "private": true,
   "description": "Shows your Claude subscription usage in the header.",

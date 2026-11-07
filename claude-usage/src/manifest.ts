@@ -4,7 +4,7 @@ import { ROUTINES } from "./gate.js";
 const manifest: PaperclipPluginManifestV1 = {
   id: "nevysha.claude-usage",
   apiVersion: 1,
-  version: "0.3.0",
+  version: "0.3.1",
   displayName: "Claude Usage",
   description: "Shows your Claude subscription usage in the header.",
   author: "Nevysha",
