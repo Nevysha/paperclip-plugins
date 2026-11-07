@@ -9,8 +9,8 @@ export const ROUTINES = [
   },
   {
     key: "safety-review",
-    title: "Safety review",
-    description: "Refresh the snapshot, run the safety overview tool and review the report, following the \"Scheduled safety review\" section of your instructions.",
+    title: "Safety and system health review",
+    description: "Refresh the snapshot (including blocked tasks), run the overview tool and review both the Safety and System health sections of the report, following the \"Scheduled safety and system health review\" section of your instructions.",
     label: "Twice a day",
     cron: "0 8,20 * * *",
     defaultEnabled: false,
