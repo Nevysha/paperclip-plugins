@@ -199,7 +199,8 @@ async function main() {
       state.nudged = {}; state.woke = {};
       act(`Claude session limit reset (was due ${new Date(prev).toISOString()}); cleared per-task cooldowns`);
     }
-    if (!Number.isFinite(prev) || resetsAt > prev) state.sessionResetsAt = new Date(resetsAt).toISOString();
+    // While the gate is closed, keep the old time, so the sweep happens on the first open tick.
+    if (!Number.isFinite(prev) || (resetsAt > prev && gate.open)) state.sessionResetsAt = new Date(resetsAt).toISOString();
   }
 
   const issues = list(issuesRaw, "issues");
