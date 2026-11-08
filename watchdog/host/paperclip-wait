@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Register that a Paperclip task is waiting on CI, so the watchdog wakes its owner
+# when the CI run finishes. The agent can then end its run instead of waiting.
+#
+#   paperclip-wait NEV-189 --ci feat/checkpoint-a        # a branch
+#   paperclip-wait NEV-189 --ci 460323a                  # or a commit (7+ hex chars)
+#   paperclip-wait NEV-189 --ci main --repo Nevysha/paperclip-plugins --note "after the merge"
+#   paperclip-wait --list
+#   paperclip-wait --cancel <id>
+#
+# Waits live in ~/.paperclip-dev/watchdog/waits.json and show in the Watchdog
+# button in Paperclip's header. A wait is dropped after 24 hours.
+set -euo pipefail
+
+NODE="$(command -v node || true)"
+if [ -z "$NODE" ]; then
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh" >/dev/null
+  NODE="$(command -v node)"
+fi
+
+exec "$NODE" - "$@" <<'EOF'
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+const os = require("node:os");
+
+const API = `http://localhost:${process.env.PAPERCLIP_PORT || 3100}/api`;
+const FILE = path.join(os.homedir(), ".paperclip-dev", "watchdog", "waits.json");
+const REPOS = ["Nevysha/space-4x", "Nevysha/paperclip-plugins"];
+const args = process.argv.slice(2);
+const usage = () => {
+  console.error("usage: paperclip-wait NEV-123 --ci <branch|commit> [--repo Nevysha/space-4x] [--note text]\n       paperclip-wait --list | --cancel <id>");
+  process.exit(2);
+};
+const read = () => { try { return JSON.parse(fs.readFileSync(FILE, "utf8")).waits || []; } catch { return []; } };
+const write = (waits) => {
+  fs.mkdirSync(path.dirname(FILE), { recursive: true, mode: 0o700 });
+  const tmp = FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify({ waits }, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, FILE);
+};
+
+(async () => {
+  if (args[0] === "--list") {
+    const waits = read();
+    if (!waits.length) return console.log("No waits.");
+    for (const w of waits) console.log(`${w.id}  ${w.issue} waits for CI on ${w.repo} ${w.ref} since ${w.createdAt}${w.note ? `  (${w.note})` : ""}`);
+    return;
+  }
+  if (args[0] === "--cancel") {
+    if (!args[1]) usage();
+    const waits = read();
+    if (!waits.some((w) => w.id === args[1])) { console.error(`paperclip-wait: no wait with id ${args[1]}`); process.exit(1); }
+    write(waits.filter((w) => w.id !== args[1]));
+    return console.log(`paperclip-wait: removed ${args[1]}`);
+  }
+  const issue = args[0];
+  if (!issue || !/^[A-Z]+-\d+$/.test(issue)) usage();
+  let ref = null, repo = REPOS[0], note;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--ci") ref = args[++i];
+    else if (args[i] === "--repo") repo = args[++i];
+    else if (args[i] === "--note") note = args[++i];
+    else usage();
+  }
+  if (!ref) usage();
+  if (!REPOS.includes(repo)) { console.error(`paperclip-wait: repo must be one of ${REPOS.join(", ")}`); process.exit(2); }
+  const r = await fetch(`${API}/issues/${issue}`);
+  if (!r.ok) { console.error(`paperclip-wait: can't find ${issue} (${r.status})`); process.exit(1); }
+  const found = await r.json();
+  if (["done", "cancelled"].includes(found.status)) { console.error(`paperclip-wait: ${issue} is ${found.status}`); process.exit(1); }
+  const waits = read().filter((w) => !(w.issue === issue && w.repo === repo && w.ref === ref));
+  const wait = { id: crypto.randomBytes(4).toString("hex"), issue, kind: "ci", repo, ref, createdAt: new Date().toISOString(), ...(note ? { note } : {}) };
+  write([...waits, wait]);
+  console.log(`paperclip-wait: ${issue} now waits for CI on ${repo} ${ref} (id ${wait.id}). The watchdog will comment on ${issue} when it finishes, which wakes its owner.`);
+})().catch((e) => { console.error(`paperclip-wait: ${e.message}`); process.exit(1); });
+EOF

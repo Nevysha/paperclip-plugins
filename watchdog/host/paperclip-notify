@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# paperclip-notify NEV-123 "three-day run finished: all corps passed"
+#
+# Posts a comment on a Paperclip task as the board, which wakes the task's
+# owner. Meant for the end of an agent's background job, so the agent doesn't
+# have to keep a run open while it waits. An agent's own comment wouldn't wake
+# it; a board comment does. If the task is `blocked` and nothing it depends on
+# is still open, it's moved back to `todo` too.
+set -euo pipefail
+
+API="http://localhost:${PAPERCLIP_PORT:-3100}/api"
+if [ $# -lt 2 ] || ! [[ "$1" =~ ^[A-Z]+-[0-9]+$ ]]; then
+  echo "usage: paperclip-notify NEV-123 \"what finished and the result\"" >&2
+  exit 2
+fi
+ident="$1"; shift
+message="$*"
+
+NODE="$(command -v node || true)"
+if [ -z "$NODE" ]; then
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh" >/dev/null
+  NODE="$(command -v node)"
+fi
+
+exec "$NODE" - "$API" "$ident" "$message" <<'EOF'
+const [api, ident, message] = process.argv.slice(2);
+(async () => {
+  const r = await fetch(`${api}/issues/${ident}`);
+  if (!r.ok) { console.error(`paperclip-notify: can't find ${ident} (${r.status})`); process.exit(1); }
+  const issue = await r.json();
+  if (["done", "cancelled"].includes(issue.status)) {
+    console.error(`paperclip-notify: ${ident} is ${issue.status}; not posting`); process.exit(1);
+  }
+  const openDeps = (issue.blockedBy ?? []).filter((b) => !["done", "cancelled"].includes(b.status));
+  const body = {
+    comment: `Background job finished (via paperclip-notify): ${message}`,
+    ...(issue.status === "blocked" && !openDeps.length && !issue.executionBlocker ? { status: "todo" } : {}),
+  };
+  const p = await fetch(`${api}/issues/${issue.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (!p.ok) { console.error(`paperclip-notify: posting failed (${p.status}) ${(await p.text()).slice(0, 200)}`); process.exit(1); }
+  console.log(`paperclip-notify: posted on ${ident}${body.status ? " and moved it to todo" : ""}`);
+})().catch((e) => { console.error(`paperclip-notify: ${e.message}`); process.exit(1); });
+EOF
