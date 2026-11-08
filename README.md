@@ -20,6 +20,12 @@ An **Approvals** button in the header, with a flag showing how many are pending,
 
 ![The header in dark mode, with an Approvals button showing a red flag with the number 1 next to the usage and Decisions buttons](approvals-button/docs/approvals-button.png)
 
+## [`watchdog`](watchdog/README.md)
+
+A **Watchdog** button in the header showing whether the watchdog (a timer outside Paperclip that restarts stalled work) is running, what it did recently, and which tasks wait on CI, with pause and resume.
+
+![The Watchdog button in the header, open on a panel that says All clear, with a Pause button and recent actions](watchdog/docs/watchdog-panel.png)
+
 ## Setup
 
 Each plugin is its own package. Paperclip loads it from its folder, so after a fresh clone, run this in the folder and then install it:
