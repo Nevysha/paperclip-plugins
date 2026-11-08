@@ -1,0 +1,10 @@
+[Unit]
+Description=Paperclip watchdog: clears quarantines, unblocks stalled tasks, relays CI results
+Documentation=file:///home/nevysha/.local/lib/paperclip-watchdog/watchdog.mjs
+
+[Service]
+Type=oneshot
+# nvm puts node on PATH; ~/.local/bin has paperclip-start/stop.
+ExecStart=/bin/bash -c 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null; export PATH="$HOME/.local/bin:$HOME/.local/share/pnpm/bin:$PATH"; exec node "$HOME/.local/lib/paperclip-watchdog/watchdog.mjs"'
+TimeoutStartSec=600
+Nice=10
