@@ -9,6 +9,8 @@ The watchdog itself isn't part of the plugin. It's a systemd user timer that run
 - wakes idle `todo` tasks;
 - comments CI results on the tasks waiting for them.
 
+The steps that start agent runs pause while Claude usage is at or over the gate in `~/.paperclip-dev/claude-usage.json`. When the session limit resets, the watchdog forgets its per-task cooldowns once, so tasks that stalled on the limit are picked up on the next run instead of hours later.
+
 The plugin only reads the watchdog's files in `~/.paperclip-dev/watchdog/` and toggles its pause flag.
 
 ![The header in dark mode with a Watchdog button showing a green dot, open on a panel that says All clear, with the last check time, a Pause button, recent actions and the log path](docs/watchdog-panel.png)
