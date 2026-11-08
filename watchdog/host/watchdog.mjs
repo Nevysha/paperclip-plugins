@@ -188,6 +188,20 @@ async function main() {
   const gate = usageGate();
   if (!gate.open) notes.push(`Not waking agents: ${gate.why}`);
 
+  // After Claude's session limit resets, runs that failed on the limit can start again. Forget the
+  // per-task cooldowns once, so stalled tasks get nudged and woken on the first tick after a reset
+  // instead of hours later. The daily caps still apply.
+  const usage = readJson(FILES.usage, null);
+  const resetsAt = usage?.sessionResetsAt ? Date.parse(usage.sessionResetsAt) : NaN;
+  if (Number.isFinite(resetsAt)) {
+    const prev = state.sessionResetsAt ? Date.parse(state.sessionResetsAt) : NaN;
+    if (gate.open && Number.isFinite(prev) && prev <= now && resetsAt > prev) {
+      state.nudged = {}; state.woke = {};
+      act(`Claude session limit reset (was due ${new Date(prev).toISOString()}); cleared per-task cooldowns`);
+    }
+    if (!Number.isFinite(prev) || resetsAt > prev) state.sessionResetsAt = new Date(resetsAt).toISOString();
+  }
+
   const issues = list(issuesRaw, "issues");
   const open = issues.filter((i) => !CLOSED.has(i.status) && i.status !== "backlog");
   const detailed = new Map();
