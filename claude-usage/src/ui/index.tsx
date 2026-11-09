@@ -59,17 +59,21 @@ function Meter({ window: w }: { window: UsageWindow }) {
 
 type GateView = {
   pauseAtPercent: number;
+  weekPauseAtPercent: number;
   routines: Array<{ key: string; title: string; enabled: boolean; status: string | null; pausedByGate: boolean }>;
 };
 
 function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }) {
   const setRoutineEnabled = usePluginAction("setRoutineEnabled");
   const setPauseAtPercent = usePluginAction("setPauseAtPercent");
+  const setWeekPauseAtPercent = usePluginAction("setWeekPauseAtPercent");
   const toast = usePluginToast();
   const [percent, setPercent] = useState(String(gate.pauseAtPercent));
+  const [weekPercent, setWeekPercent] = useState(String(gate.weekPauseAtPercent));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => setPercent(String(gate.pauseAtPercent)), [gate.pauseAtPercent]);
+  useEffect(() => setWeekPercent(String(gate.weekPauseAtPercent)), [gate.weekPauseAtPercent]);
 
   const save = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -78,6 +82,7 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
     } catch (err) {
       toast({ title: "Couldn't save that", body: err instanceof Error ? err.message : String(err), tone: "error" });
       setPercent(String(gate.pauseAtPercent));
+      setWeekPercent(String(gate.weekPauseAtPercent));
     } finally {
       setBusy(false);
       refresh();
@@ -87,12 +92,24 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
   return (
     <div style={{ display: "grid", gap: 8, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
       <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
-        Pause routines at
+        Pause at 5-hour usage
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           <input type="number" min={1} max={100} value={percent} disabled={busy}
             onChange={(e) => setPercent(e.target.value)}
             onBlur={() => {
               if (Number(percent) !== gate.pauseAtPercent) void save(() => setPauseAtPercent({ percent: Number(percent) }));
+            }}
+            style={{ width: 56, padding: "2px 6px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)" }} />
+          %
+        </span>
+      </label>
+      <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+        Pause at weekly usage
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <input type="number" min={1} max={100} value={weekPercent} disabled={busy}
+            onChange={(e) => setWeekPercent(e.target.value)}
+            onBlur={() => {
+              if (Number(weekPercent) !== gate.weekPauseAtPercent) void save(() => setWeekPauseAtPercent({ percent: Number(weekPercent) }));
             }}
             style={{ width: 56, padding: "2px 6px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)" }} />
           %
@@ -109,7 +126,7 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
           {r.status === "paused" ? <span style={muted}>{r.pausedByGate ? "Paused by usage" : "Paused"}</span> : null}
         </label>
       ))}
-      <div style={muted}>Checked routines pause when session or weekly usage reaches the limit, and resume when it drops.</div>
+      <div style={muted}>Checked routines pause when 5-hour or weekly usage reaches its limit, and resume when it drops. The watchdog uses the same limits.</div>
     </div>
   );
 }

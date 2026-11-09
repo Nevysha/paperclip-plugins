@@ -75,5 +75,9 @@ describe("gate", () => {
     expect(isOverLimit({ session: 1, week: 95 }, 90)).toBe(true);
     expect(isOverLimit({ session: 89, week: null }, 90)).toBe(false);
     expect(isOverLimit(null, 90)).toBe(false);
+    // Separate weekly limit
+    expect(isOverLimit({ session: 50, week: 90 }, 80, 95)).toBe(false);
+    expect(isOverLimit({ session: 80, week: 10 }, 80, 95)).toBe(true);
+    expect(isOverLimit({ session: 10, week: 95 }, 80, 95)).toBe(true);
   });
 });
