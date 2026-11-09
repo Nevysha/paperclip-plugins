@@ -194,8 +194,15 @@ async function main() {
   // instead of hours later. The daily caps still apply.
   const usage = readJson(FILES.usage, null);
   const resetsAt = usage?.sessionResetsAt ? Date.parse(usage.sessionResetsAt) : NaN;
+  const prevResetsAt = state.sessionResetsAt ? Date.parse(state.sessionResetsAt) : NaN;
+  // Right after a reset there's no session window yet, so the usage file has no reset time at all.
+  if (!Number.isFinite(resetsAt) && usage?.status === "ok" && !usage.stale && gate.open
+    && Number.isFinite(prevResetsAt) && prevResetsAt <= now) {
+    state.nudged = {}; state.woke = {}; state.sessionResetsAt = null;
+    act(`Claude session limit reset (was due ${new Date(prevResetsAt).toISOString()}); cleared per-task cooldowns`);
+  }
   if (Number.isFinite(resetsAt)) {
-    const prev = state.sessionResetsAt ? Date.parse(state.sessionResetsAt) : NaN;
+    const prev = prevResetsAt;
     if (gate.open && Number.isFinite(prev) && prev <= now && resetsAt > prev) {
       state.nudged = {}; state.woke = {};
       act(`Claude session limit reset (was due ${new Date(prev).toISOString()}); cleared per-task cooldowns`);
