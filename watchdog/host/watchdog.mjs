@@ -284,7 +284,25 @@ async function main() {
   // 5. CI results -> comments on the waiting task
   await checkCi({ gate, detailed, liveIssueIds, issues });
 
+  // 6. Tasks marked "Sized: one run" get the Sliced label (agents' create_task can't set labels).
+  // Only the label changes, so this runs even while the usage gate is closed.
+  await labelSliced(issues);
+
   return finish({ healthy: true, summary: actions.length ? `${actions.length} action(s) this tick` : "All clear" });
+}
+
+const SLICED_LABEL = "Sliced";
+const SLICED_MARKER = /^\s*(?:\*\*)?Sized:\s*one run\b/i;
+async function labelSliced(issues) {
+  const candidates = issues.filter((i) => !CLOSED.has(i.status) && SLICED_MARKER.test(i.description ?? "")
+    && !(i.labels ?? []).some((l) => l.name === SLICED_LABEL));
+  if (!candidates.length) return;
+  const labels = list(await api("GET", `/companies/${COMPANY}/labels`), "labels");
+  const label = labels.find((l) => l.name === SLICED_LABEL);
+  if (!label) { notes.push(`No "${SLICED_LABEL}" label in the company; can't mark ${candidates.length} sized task(s)`); return; }
+  for (const i of candidates) {
+    await mutate(`labelled ${i.identifier} ${SLICED_LABEL}`, "PATCH", `/issues/${i.id}`, { labelIds: [...(i.labelIds ?? []), label.id] });
+  }
 }
 
 // Waits registered with paperclip-wait, in ~/.paperclip-dev/watchdog/waits.json.
