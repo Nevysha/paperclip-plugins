@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { definePlugin, runWorker, type PluginContext } from "@paperclipai/plugin-sdk";
-import { DEFAULT_SETTINGS, ROUTINES, decide, isOverLimit, isRoutineKey, type GateSettings } from "./gate.js";
+import { DEFAULT_SETTINGS, ROUTINES, decide, isOverLimit, isRoutineKey, type GateSettings, weekLimit } from "./gate.js";
 import { parseCredentials, toUsageFile, toWindows, type UsageResult } from "./usage.js";
 
 const CACHE_MS = 2 * 60 * 1000; // The usage endpoint rate-limits, and the header doesn't need to be fresher than this.
@@ -64,7 +64,7 @@ async function readSettings(ctx: PluginContext): Promise<GateSettings> {
 async function publishUsage(result: UsageResult, settings: GateSettings) {
   const tmp = `${USAGE_FILE}.tmp`;
   await mkdir(dirname(USAGE_FILE), { recursive: true });
-  const gate = { pauseAtPercent: settings.pauseAtPercent, routines: settings.enabled };
+  const gate = { pauseAtPercent: settings.pauseAtPercent, weekPauseAtPercent: weekLimit(settings), routines: settings.enabled };
   await writeFile(tmp, `${JSON.stringify(toUsageFile(result, gate), null, 2)}\n`);
   await rename(tmp, USAGE_FILE);
 }
@@ -74,7 +74,7 @@ async function applyGate(ctx: PluginContext, result: UsageResult, settings: Gate
   const known = result.status === "ok" && !result.stale;
   const windows = known ? result.windows : [];
   const percent = (key: string) => windows.find((w) => w.key === key)?.usedPercent ?? null;
-  const over = known && isOverLimit({ session: percent("session"), week: percent("week") }, settings.pauseAtPercent);
+  const over = known && isOverLimit({ session: percent("session"), week: percent("week") }, settings.pauseAtPercent, weekLimit(settings));
   const pausedByGate = { ...settings.pausedByGate };
 
   for (const routine of ROUTINES) {
@@ -118,7 +118,7 @@ async function gateView(ctx: PluginContext) {
       pausedByGate: settings.pausedByGate[r.key] === true,
     };
   }));
-  return { pauseAtPercent: settings.pauseAtPercent, routines };
+  return { pauseAtPercent: settings.pauseAtPercent, weekPauseAtPercent: weekLimit(settings), routines };
 }
 
 const plugin = definePlugin({
@@ -136,6 +136,13 @@ const plugin = definePlugin({
         throw new Error("The limit must be a whole number from 1 to 100");
       }
       await tick(ctx, (s) => ({ ...s, pauseAtPercent: percent }));
+      return gateView(ctx);
+    });
+    ctx.actions.register("setWeekPauseAtPercent", async ({ percent }) => {
+      if (typeof percent !== "number" || !Number.isInteger(percent) || percent < 1 || percent > 100) {
+        throw new Error("The limit must be a whole number from 1 to 100");
+      }
+      await tick(ctx, (s) => ({ ...s, weekPauseAtPercent: percent }));
       return gateView(ctx);
     });
 

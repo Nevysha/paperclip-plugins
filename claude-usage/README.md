@@ -15,7 +15,7 @@ Every 5 minutes it also writes `~/.paperclip-dev/claude-usage.json` (or `CLAUDE_
 
 ## Pausing routines
 
-The panel has a usage limit and a list of routines. Every 5 minutes, checked routines pause when session or weekly usage reaches the limit, and resume when it drops. This runs in the plugin, so it uses no Claude usage.
+The panel has two usage limits, one for the 5-hour session and one for the week, and a list of routines. Every 5 minutes, checked routines pause when either window reaches its limit, and resume when it drops. The weekly limit defaults to the session one until you set it. Both are published in `~/.paperclip-dev/claude-usage.json` (`gate.pauseAtPercent`, `gate.weekPauseAtPercent`), and the watchdog uses them too. This runs in the plugin, so it uses no Claude usage.
 
 - Only routines declared in `src/gate.ts` can be listed, because a plugin can only pause routines it owns. To add one, add it there and in `ASSIGNEES` in `src/worker.ts`. New capabilities aren't needed, but new routines are created on the next check.
 - A routine you paused by hand stays paused. If you resume one while usage is over the limit, the next check pauses it again.

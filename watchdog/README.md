@@ -10,7 +10,7 @@ The watchdog itself isn't part of the plugin. It's a systemd user timer that run
 - adds the **Sliced** label to open tasks whose description starts with `Sized: one run`, since agents can't set labels themselves;
 - comments CI results on the tasks waiting for them. It skips results nobody can act on: a commit a newer push replaced, a deleted branch, or a pull request that's already merged or closed. Waits registered with `paperclip-wait` are always delivered.
 
-The steps that start agent runs pause while Claude usage is at or over the gate in `~/.paperclip-dev/claude-usage.json`. When the session limit resets, the watchdog forgets its per-task cooldowns once, so tasks that stalled on the limit are picked up on the next run instead of hours later.
+The steps that start agent runs pause while Claude usage is at or over the limits in `~/.paperclip-dev/claude-usage.json`: `gate.pauseAtPercent` for the 5-hour session and `gate.weekPauseAtPercent` for the week. When the session limit resets, the watchdog forgets its per-task cooldowns once, so tasks that stalled on the limit are picked up on the next run instead of hours later.
 
 The plugin only reads the watchdog's files in `~/.paperclip-dev/watchdog/` and toggles its pause flag.
 

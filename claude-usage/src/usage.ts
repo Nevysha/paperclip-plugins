@@ -55,6 +55,7 @@ export function parseCredentials(raw: string, now = Date.now()): string | null {
 
 export interface PublishedGate {
   pauseAtPercent: number;
+  weekPauseAtPercent: number;
   routines: Record<string, boolean>;
 }
 

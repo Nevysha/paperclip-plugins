@@ -101,11 +101,12 @@ function usageGate() {
   const u = readJson(FILES.usage, null);
   if (!u) return { open: true, why: "usage file missing; not gating" };
   const limit = u.gate?.pauseAtPercent ?? 80;
+  const weekLimit = u.gate?.weekPauseAtPercent ?? limit;
   const stale = !u.fetchedAt || now - Date.parse(u.fetchedAt) > 30 * MIN;
   if (stale) return { open: true, why: "usage data stale; not gating" };
-  const hot = [u.sessionPercent, u.weekPercent].some((p) => typeof p === "number" && p >= limit);
+  const hot = (typeof u.sessionPercent === "number" && u.sessionPercent >= limit) || (typeof u.weekPercent === "number" && u.weekPercent >= weekLimit);
   return hot
-    ? { open: false, why: `usage ${u.sessionPercent}% session / ${u.weekPercent}% week >= ${limit}%` }
+    ? { open: false, why: `usage ${u.sessionPercent}% session (limit ${limit}%) / ${u.weekPercent}% week (limit ${weekLimit}%)` }
     : { open: true, why: `usage ${u.sessionPercent}% session / ${u.weekPercent}% week` };
 }
 

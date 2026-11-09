@@ -20,7 +20,10 @@ export const ROUTINES = [
 export type RoutineKey = (typeof ROUTINES)[number]["key"];
 
 export interface GateSettings {
+  /** Session (5-hour) limit, and the weekly one unless weekPauseAtPercent is set. */
   pauseAtPercent: number;
+  /** Separate weekly limit; when unset the weekly window uses pauseAtPercent. */
+  weekPauseAtPercent?: number;
   enabled: Record<string, boolean>;
   pausedByGate: Record<string, boolean>;
 }
@@ -33,8 +36,11 @@ export const DEFAULT_SETTINGS: GateSettings = {
 
 export const isRoutineKey = (value: unknown): value is RoutineKey => ROUTINES.some((r) => r.key === value);
 
-export const isOverLimit = (usage: { session: number | null; week: number | null } | null, pauseAtPercent: number) =>
-  usage !== null && Math.max(usage.session ?? 0, usage.week ?? 0) >= pauseAtPercent;
+export const weekLimit = (settings: Pick<GateSettings, "pauseAtPercent" | "weekPauseAtPercent">) =>
+  settings.weekPauseAtPercent ?? settings.pauseAtPercent;
+
+export const isOverLimit = (usage: { session: number | null; week: number | null } | null, sessionLimit: number, weekLimitPercent = sessionLimit) =>
+  usage !== null && ((usage.session ?? 0) >= sessionLimit || (usage.week ?? 0) >= weekLimitPercent);
 
 /**
  * Only resumes routines the gate paused itself, so one you paused by hand stays paused.
