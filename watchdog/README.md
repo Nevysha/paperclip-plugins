@@ -7,7 +7,7 @@ The watchdog itself isn't part of the plugin. It's a systemd user timer that run
 - recreates tasks Paperclip won't restart;
 - moves stalled `blocked` tasks back to `todo`;
 - wakes idle `todo` tasks;
-- comments CI results on the tasks waiting for them.
+- comments CI results on the tasks waiting for them. It skips results nobody can act on: a commit a newer push replaced, a deleted branch, or a pull request that's already merged or closed. Waits registered with `paperclip-wait` are always delivered.
 
 The steps that start agent runs pause while Claude usage is at or over the gate in `~/.paperclip-dev/claude-usage.json`. When the session limit resets, the watchdog forgets its per-task cooldowns once, so tasks that stalled on the limit are picked up on the next run instead of hours later.
 

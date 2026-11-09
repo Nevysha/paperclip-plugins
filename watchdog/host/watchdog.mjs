@@ -334,6 +334,27 @@ async function checkWaits({ gate, detailed, liveIssueIds, byIdent, runsByRepo })
   removeWaits(done);
 }
 
+// A result nobody can act on wakes an agent for nothing: the commit is no longer the head of
+// its branch (a newer push replaced it), the branch is gone, or its pull request is merged or
+// closed. Returns why it's stale, or null. On a GitHub error, deliver rather than drop it.
+function staleReason(repo, run) {
+  if (!run.headBranch || run.headBranch === "main") return null;
+  try {
+    if (run.event === "pull_request") {
+      const prs = JSON.parse(gh(["api", `repos/${repo}/commits/${run.headSha}/pulls`]));
+      const open = prs.filter((p) => p.state === "open");
+      if (!open.length) return prs.length ? `its pull request #${prs[0].number} is ${prs[0].merged_at ? "merged" : "closed"}` : "no open pull request has this commit";
+      if (!open.some((p) => p.head?.sha === run.headSha)) return `a newer commit replaced it in pull request #${open[0].number}`;
+      return null;
+    }
+    const tip = gh(["api", `repos/${repo}/branches/${encodeURIComponent(run.headBranch)}`, "--jq", ".commit.sha"]).trim();
+    return tip === run.headSha ? null : "a newer commit replaced it on the branch";
+  } catch (e) {
+    if (/HTTP 404|Branch not found/i.test(String(e.message) + String(e.stderr ?? ""))) return "the branch is gone";
+    return null;
+  }
+}
+
 async function checkCi({ gate, detailed, liveIssueIds, issues }) {
   const byIdent = new Map(issues.map((i) => [i.identifier, i]));
   const runsByRepo = new Map();
@@ -352,6 +373,8 @@ async function checkCi({ gate, detailed, liveIssueIds, issues }) {
       if (state.ciPending[key] && now - state.ciPending[key] > LIMITS.ciPendingMax) {
         log("warn", `gave up delivering CI result ${key}`); state.ciSeen[key] = now; delete state.ciPending[key]; continue;
       }
+      const stale = staleReason(repo, run);
+      if (stale) { log("debug", `CI ${key} ${run.headBranch}@${run.headSha.slice(0, 7)} skipped: ${stale}`); state.ciSeen[key] = now; delete state.ciPending[key]; continue; }
       let message = run.displayTitle ?? "";
       try { message = gh(["api", `repos/${repo}/commits/${run.headSha}`, "--jq", ".commit.message"]); } catch { /* keep title */ }
       const idents = new Set([...`${message} ${run.headBranch}`.matchAll(/\bNEV-\d+\b/g)].map((m) => m[0]));
