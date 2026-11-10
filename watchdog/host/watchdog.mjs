@@ -136,7 +136,14 @@ function restartPaperclip() {
   if (DRY) { act("(would) restart Paperclip to clear the company-wide quarantine"); return; }
   // zsh -ic loads nvm, which paperclip-start needs. paperclip-stop refuses while
   // runs are live, so this can't cut off work.
-  const out = execFileSync("zsh", ["-ic", "paperclip-stop && paperclip-start"], { encoding: "utf8", timeout: 400_000 });
+  // Under the systemd timer, anything this run starts is in the service's cgroup, and systemd
+  // kills that cgroup when the oneshot finishes: on 2026-11-10 the restarted Paperclip died
+  // 3 minutes later. A transient scope gives Paperclip its own cgroup.
+  const restart = ["zsh", "-ic", "paperclip-stop && paperclip-start"];
+  const [cmd, ...args] = process.env.INVOCATION_ID
+    ? ["systemd-run", "--user", "--scope", "--quiet", "--collect", `--unit=paperclip-${Date.now()}`, ...restart]
+    : restart;
+  const out = execFileSync(cmd, args, { encoding: "utf8", timeout: 400_000 });
   state.restarts.push(now);
   act("restarted Paperclip to clear the company-wide quarantine", { output: out.trim().split("\n").slice(-2).join(" | ") });
 }
