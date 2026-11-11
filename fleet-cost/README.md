@@ -1,10 +1,18 @@
-# Fleet Cost
+# Token Lens
 
-A **Fleet Cost** page showing what the fleet's Claude usage would cost at API prices, next to its token usage. The fleet runs on a subscription, so Paperclip's own Costs page shows $0. This page puts a price on the same tokens.
+Where the fleet's Claude tokens go. One page with three tabs:
+
+- **Cost:** what the usage would cost at API prices, next to its token usage. The fleet runs on a subscription, so Paperclip's own Costs page shows $0. This tab puts a price on the same tokens.
+- **Tools:** what each kind of tool call costs, calls per run, runs over 100 calls, and each run's starting context.
+- **Efficiency:** tokens and cost per changed line of merged code, counted three ways: all lines, without docs (`.md`), and docs only.
+
+The plugin was called Fleet Cost; its ID (`nevysha.fleet-cost`) and page URL (`/<company>/fleet-cost`) are unchanged.
+
+## Cost tab
 
 ![The Fleet Cost page in dark mode, split by agent: totals and rates, cost over time as lines with a dashed total, tokens over time as lines with cache reads left out, then the per-agent, per-day and most expensive task breakdowns](docs/fleet-cost-view.png)
 
-## What it shows
+### What it shows
 
 - **Totals:** today, this week (from Monday), this month and all time. Each shows cost, tokens and runs.
 - **Rates:** the average day over the last 7 days, the month's projected total at the current pace, the average run, and the share of tokens and of cost that comes from cache reads.
@@ -17,9 +25,45 @@ A **Fleet Cost** page showing what the fleet's Claude usage would cost at API pr
   - the 20 most expensive tasks, linked to the task.
 - A **Cost** button in the header with today's cost. A sidebar link exists too, but the coordinator sidebar doesn't show plugin links.
 
+## Tools tab
+
+![The Tools tab in dark mode: tool calls, runs over 100 calls, starting context, the most expensive tool, and the table of where the tokens go, with Bash split by command](docs/token-lens-tools.png)
+
+- Calls per tool, with Bash split by command: file reads (`sed -n`, `cat`), searches (`grep`, `find`, `ls`), tests, local CI, typecheck and lint, git, gh, file edits, polling loops and so on. A chained command counts by its first real command.
+- **What each call costs.** Every tool call is followed by a model request that re-sends the whole context, so a call costs about the context it's made at, even when it prints one line. The collector reads each run's context after every step and charges each call the request that follows it. **Context added** is what the call's result put into the context. **Run start** is each run's first request (instructions, tools and task) and **Model output** is what the model wrote. A run's rows are scaled to its usage receipt, so they add up to it exactly (unscaled, they match within a few percent).
+- Calls per run over time (median, 90th percentile, runs over 100 calls), per-agent medians and peak context, and the list of runs over 100 calls.
+
+## Efficiency tab
+
+![The Efficiency tab in dark mode, without docs: tokens per line, cost per 100 lines, lines changed, the share of tokens on tasks that merged nothing, and the three counts side by side](docs/token-lens-efficiency.png)
+
+- **Lines** are the additions and deletions of each merged PR's own commits, before the squash. Lockfiles and binary files are left out; `.md` and `.mdx` count as docs.
+- **Which task a commit belongs to:** the task of the run that made it. The collector finds that run through its `git commit` commands: the hash git printed, or else the commit's first line matched against the commit messages the runs used. Commits from before runs recorded tool calls (the `claude_local` night of Nov 8–9) and merge commits fall back to the task named in the PR title.
+- **A task's tokens** are every run on it, including reviews and retries on that task. Tasks that merged nothing (reviews on their own task, plans, questions, unmerged work) are shown as a share of tokens.
+- The three counts: **All lines** (code and docs); **Without docs** (code lines only, tasks that changed code; a mixed task keeps all its tokens); **Docs only** (tasks that changed nothing but `.md`).
+- Line counts are a rough measure of work: good for trends and outliers, not for ranking agents against each other.
+
+## The collector
+
+Paperclip doesn't let a plugin read run events (where tool calls are) or call localhost, so `collector/collect.mjs` runs outside it. Every 15 minutes it:
+
+1. reads finished runs' tool and usage events from Postgres and posts per-run summaries to the plugin's `POST /ingest` route;
+2. lists merged PRs with `gh` (the agents' limited token, `GH_CONFIG_DIR=~/.config/space4x/gh`), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
+
+It does nothing when Paperclip isn't answering and never starts it. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
+
+```sh
+GH_CONFIG_DIR=~/.config/space4x/gh node collector/collect.mjs          # one pass
+systemctl --user link $PWD/collector/systemd/token-lens-collect.{service,timer}
+systemctl --user enable --now token-lens-collect.timer                  # every 15 minutes
+journalctl --user -u token-lens-collect -n 20                           # its log
+```
+
+The plugin stores the summaries in its own tables (`migrations/001_token_lens.sql`) and joins them with the runs, agents and tasks it can read.
+
 ## How the price is worked out
 
-The worker reads the usage receipt of every run (`heartbeat_runs.usage_json`: input, cache-write, cache-read and output tokens, plus the model). It reads nothing else and writes nothing. The page applies Claude API list prices (`src/pricing.ts`):
+The worker reads the usage receipt of every run (`heartbeat_runs.usage_json`: input, cache-write, cache-read and output tokens, plus the model). The page applies Claude API list prices (`src/pricing.ts`):
 
 | Model | Input | Cache read | Cache write (5 min / 1 h) | Output |
 |---|---|---|---|---|
@@ -34,7 +78,7 @@ When prices change, edit `RATES` and `PRICES_AS_OF` in `src/pricing.ts`, then re
 
 ```sh
 pnpm install
-pnpm test && pnpm typecheck && pnpm build
+pnpm test && pnpm typecheck && pnpm build   # tests cover pricing, the views, ingest and the collector logic
 ```
 
 After a rebuild, reload the plugin: POST `/api/plugins/<id>/disable`, then `/enable`.

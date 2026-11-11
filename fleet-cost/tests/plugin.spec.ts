@@ -8,9 +8,10 @@ const row = (over: Partial<UsageRow> = {}): UsageRow => ({
 });
 
 describe("manifest", () => {
-  it("only reads, and only for the board", () => {
-    expect(manifest.apiRoutes?.every((r) => r.auth === "board" && r.method === "GET")).toBe(true);
-    expect(manifest.capabilities).not.toContain("database.namespace.write");
+  it("serves the board only, and writes only through ingest", () => {
+    expect(manifest.apiRoutes?.every((r) => r.auth === "board")).toBe(true);
+    expect(manifest.apiRoutes?.filter((r) => r.method !== "GET").map((r) => r.routeKey)).toEqual(["ingest"]);
+    expect(manifest.database?.coreReadTables).toEqual(["heartbeat_runs", "agents", "issues"]);
   });
 });
 
