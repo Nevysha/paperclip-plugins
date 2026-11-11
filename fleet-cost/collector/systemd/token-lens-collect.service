@@ -1,0 +1,12 @@
+[Unit]
+Description=Token Lens collector: tool calls per run and merged-commit lines for the Token Lens plugin
+Documentation=file:///home/nevysha/projects/paperclip-plugins/fleet-cost/collector/collect.mjs
+
+[Service]
+Type=oneshot
+# Does nothing when Paperclip isn't answering; it never starts Paperclip.
+# GH_CONFIG_DIR: the agents' limited GitHub token, never the founder's login.
+Environment=GH_CONFIG_DIR=%h/.config/space4x/gh
+ExecStart=/bin/bash -c 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null; cd "$HOME/projects/paperclip-plugins/fleet-cost" && exec node collector/collect.mjs'
+TimeoutStartSec=900
+Nice=10

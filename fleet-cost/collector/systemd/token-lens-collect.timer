@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Token Lens collector every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

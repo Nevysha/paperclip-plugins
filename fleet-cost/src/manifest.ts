@@ -4,14 +4,15 @@ const manifest: PaperclipPluginManifestV1 = {
   id: "nevysha.fleet-cost",
   apiVersion: 1,
   version: "0.1.0",
-  displayName: "Fleet Cost",
-  description: "What the fleet's Claude usage would cost at API prices, with token usage, per day, week, month, agent and task.",
+  displayName: "Token Lens",
+  description: "Where the fleet's Claude tokens go: cost at API prices, tool calls and what each costs, and tokens per line of merged code.",
   author: "Nevysha",
   categories: ["ui"],
   capabilities: [
     "api.routes.register",
     "database.namespace.migrate",
     "database.namespace.read",
+    "database.namespace.write",
     "ui.action.register",
     "ui.page.register",
     "ui.sidebar.register",
@@ -20,41 +21,43 @@ const manifest: PaperclipPluginManifestV1 = {
     worker: "./dist/worker.js",
     ui: "./dist/ui",
   },
-  // Read-only: the plugin owns no tables and only reads runs, agents and tasks.
+  // Reads runs, agents and tasks. Its own tables hold what collector/collect.mjs posts to
+  // /ingest: tool calls per run and merged commits, which plugins can't read themselves.
   database: {
     migrationsDir: "migrations",
     coreReadTables: ["heartbeat_runs", "agents", "issues"],
   },
-  apiRoutes: [
-    {
-      routeKey: "usage",
-      method: "GET",
-      path: "/usage",
-      auth: "board",
-      capability: "api.routes.register",
-      companyResolution: { from: "query", key: "companyId" },
-    },
-  ],
+  apiRoutes: (
+    [
+      ["usage", "GET", "/usage"],
+      ["tools", "GET", "/tools"],
+      ["efficiency", "GET", "/efficiency"],
+      ["ingest", "POST", "/ingest"],
+    ] as const
+  ).map(([routeKey, method, path]) => ({
+    routeKey, method, path, auth: "board" as const, capability: "api.routes.register" as const,
+    companyResolution: { from: "query" as const, key: "companyId" },
+  })),
   ui: {
     slots: [
       {
         type: "page",
         id: "fleet-cost-page",
-        displayName: "Fleet Cost",
+        displayName: "Token Lens",
         exportName: "FleetCostPage",
         routePath: "fleet-cost",
       },
       {
         type: "sidebar",
         id: "fleet-cost-sidebar",
-        displayName: "Fleet Cost",
+        displayName: "Token Lens",
         exportName: "FleetCostSidebarLink",
       },
       {
         // The coordinator sidebar doesn't render plugin links, so this is the way in there.
         type: "globalToolbarButton",
         id: "fleet-cost-toolbar-button",
-        displayName: "Fleet Cost",
+        displayName: "Token Lens",
         exportName: "FleetCostToolbarButton",
       },
     ],
