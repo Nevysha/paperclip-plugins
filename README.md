@@ -32,6 +32,12 @@ A **Fleet Cost** page showing what the fleet's Claude usage would cost at API pr
 
 ![The Fleet Cost page in dark mode, split by agent, with cost totals and daily cost and token line charts](fleet-cost/docs/fleet-cost-view.png)
 
+## [`dependency-graph`](dependency-graph/README.md)
+
+A **Dependencies** page drawing which tasks wait on which as a graph, flagging stale waits, loops and the tasks holding up the most work. There's also a header button with the number of stale waits.
+
+![The Dependencies page in dark mode, with one task's chain lit up and its details in the side panel](dependency-graph/docs/dependency-graph.png)
+
 ## Setup
 
 Each plugin is its own package. Paperclip loads it from its folder, so after a fresh clone, run this in the folder and then install it:
