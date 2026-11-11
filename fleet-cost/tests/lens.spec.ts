@@ -58,8 +58,17 @@ describe("efficiency", () => {
     expect(efficiencyOf(tasks, "all")).toMatchObject({ tasks: 2, lines: 240 });
     const code = efficiencyOf(tasks, "code");
     expect(code).toMatchObject({ tasks: 1, lines: 100 });
-    expect(code.tokensPerLine).toBe(100_000); // all of i1's 10M tokens over its 100 code lines
-    expect(efficiencyOf(tasks, "docs")).toMatchObject({ tasks: 1, lines: 40, tokensPerLine: 100_000 });
+    expect(code.tokensPerLine).toBe(50_000); // half of i1's 10M tokens (its 100 code lines of 200) over 100 lines
+    const docs = efficiencyOf(tasks, "docs");
+    expect(docs).toMatchObject({ tasks: 2, lines: 140 }); // i1's 100 doc lines and i2's 40
+    expect(docs.t.tokens.total).toBe(9_000_000); // the other half of i1, and all of i2
+  });
+  it("splits mixed tasks so without docs plus docs only is all lines", () => {
+    const { tasks } = data();
+    const [all, code, docs] = (["all", "code", "docs"] as const).map((m) => efficiencyOf(tasks, m));
+    expect(code!.lines + docs!.lines).toBe(all!.lines);
+    expect(code!.t.tokens.total + docs!.t.tokens.total).toBeCloseTo(all!.t.tokens.total);
+    expect(code!.t.cost.total + docs!.t.cost.total).toBeCloseTo(all!.t.cost.total);
   });
 });
 
