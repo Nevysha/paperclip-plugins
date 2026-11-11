@@ -50,6 +50,15 @@ function useUsage(companyId: string | null, refreshKey: unknown) {
   return { data, error };
 }
 
+type ChartKind = "bars" | "lines";
+function useChartKind(key: string, fallback: ChartKind): [ChartKind, (k: ChartKind) => void] {
+  const storageKey = `nevysha.fleet-cost.chart.${key}`;
+  const [kind, setKind] = useState<ChartKind>(() => {
+    try { const v = localStorage.getItem(storageKey); return v === "bars" || v === "lines" ? v : fallback; } catch { return fallback; }
+  });
+  return [kind, (k) => { setKind(k); try { localStorage.setItem(storageKey, k); } catch { /* per-viewer convenience only */ } }];
+}
+
 function useTtl(): [CacheTtl, (t: CacheTtl) => void] {
   const [ttl, setTtl] = useState<CacheTtl>(() => {
     try { return localStorage.getItem(TTL_KEY) === "5m" ? "5m" : "1h"; } catch { return "1h"; }
@@ -190,7 +199,7 @@ type Series = { id: string; label: string; color: string };
 type Bucket = { key: string; label: string; values: Record<string, number>; tokenValues: Record<string, number>; totals: Totals };
 type Metric = "cost" | "tokens";
 
-function StackedBars({ buckets, series, metric }: { buckets: Bucket[]; series: Series[]; metric: Metric }) {
+function StackedBars({ buckets, series, metric }: { buckets: Bucket[]; series: Series[]; metric: Metric; showTotal?: boolean }) {
   const fmt = metric === "cost" ? usd : tok;
   const valuesOf = (b: Bucket) => (metric === "cost" ? b.values : b.tokenValues);
   const [ref, width] = useWidth<HTMLDivElement>();
@@ -261,16 +270,20 @@ function StackedBars({ buckets, series, metric }: { buckets: Bucket[]; series: S
   );
 }
 
-// ---------------------------------------------------------------- line chart (tokens)
+// ---------------------------------------------------------------- line chart
 
-/** One line per series from a shared zero baseline; points sit at the same x as the bars above. */
-function TokenLines({ buckets, series }: { buckets: Bucket[]; series: Series[] }) {
+/** One line per series from a shared zero baseline; points sit at the same x as the bars. */
+function LineChart({ buckets, series, metric, showTotal }: { buckets: Bucket[]; series: Series[]; metric: Metric; showTotal?: boolean }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
+  const fmt = metric === "cost" ? usd : tok;
+  const valuesOf = (b: Bucket) => (metric === "cost" ? b.values : b.tokenValues);
+  const totals = buckets.map((b) => series.reduce((sum, x) => sum + (valuesOf(b)[x.id] ?? 0), 0));
   const H = 260, padL = 52, padB = 24, padT = 8;
   const innerW = Math.max(0, width - padL - 4);
   const innerH = H - padB - padT;
-  const { max, step } = niceMax(Math.max(0, ...buckets.flatMap((b) => series.map((s) => b.tokenValues[s.id] ?? 0))));
+  const peak = showTotal ? Math.max(0, ...totals) : Math.max(0, ...buckets.flatMap((b) => series.map((s) => valuesOf(b)[s.id] ?? 0)));
+  const { max, step } = niceMax(peak);
   const slot = buckets.length ? innerW / buckets.length : 0;
   const x = (i: number) => padL + slot * i + slot / 2;
   const y = (v: number) => padT + innerH - (v / max) * innerH;
@@ -281,29 +294,37 @@ function TokenLines({ buckets, series }: { buckets: Bucket[]; series: Series[] }
 
   const hb = hover != null ? buckets[hover] : null;
   const tipLeft = hover != null ? Math.min(Math.max(0, x(hover) - 100), Math.max(0, width - 210)) : 0;
-  const hbTotal = hb ? series.reduce((s, x) => s + (hb.tokenValues[x.id] ?? 0), 0) : 0;
 
   return (
     <div className="fc-chart" ref={ref} onMouseLeave={() => setHover(null)}>
       {width > 0 ? (
-        <svg width={width} height={H} role="img" aria-label="Tokens over time">
+        <svg width={width} height={H} role="img" aria-label={metric === "cost" ? "Cost at API prices over time" : "Tokens over time"}>
           {ticks.map((t) => (
             <g key={t}>
               <line x1={padL} x2={width - 4} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
-              <text className="fc-axis" x={padL - 8} y={y(t) + 4} textAnchor="end">{tok(t)}</text>
+              <text className="fc-axis" x={padL - 8} y={y(t) + 4} textAnchor="end">{fmt(t)}</text>
             </g>
           ))}
           {buckets.map((b, i) => (i % every === 0
             ? <text key={b.key} className="fc-axis" x={x(i)} y={H - 6} textAnchor="middle">{b.label}</text>
             : null))}
           {hover != null ? <line x1={x(hover)} x2={x(hover)} y1={padT} y2={padT + innerH} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" /> : null}
+          {showTotal ? (
+            <g>
+              <path d={`M${totals.map((v, i) => `${x(i)},${y(v)}`).join("L")}`} fill="none" stroke="var(--foreground)" strokeOpacity={0.7}
+                strokeWidth={2} strokeDasharray="6 4" strokeLinejoin="round" strokeLinecap="round" />
+              {totals.map((v, i) => (markers || hover === i
+                ? <circle key={i} cx={x(i)} cy={y(v)} r={hover === i ? 5 : 4} fill="var(--foreground)" stroke="var(--card)" strokeWidth={2} />
+                : null))}
+            </g>
+          ) : null}
           {series.map((s) => {
-            const pts = buckets.map((b, i) => `${x(i)},${y(b.tokenValues[s.id] ?? 0)}`);
+            const pts = buckets.map((b, i) => `${x(i)},${y(valuesOf(b)[s.id] ?? 0)}`);
             return (
               <g key={s.id}>
                 <path d={`M${pts.join("L")}`} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
                 {buckets.map((b, i) => (markers || hover === i
-                  ? <circle key={b.key} cx={x(i)} cy={y(b.tokenValues[s.id] ?? 0)} r={hover === i ? 5 : 4} fill={s.color} stroke="var(--card)" strokeWidth={2} />
+                  ? <circle key={b.key} cx={x(i)} cy={y(valuesOf(b)[s.id] ?? 0)} r={hover === i ? 5 : 4} fill={s.color} stroke="var(--card)" strokeWidth={2} />
                   : null))}
               </g>
             );
@@ -311,22 +332,35 @@ function TokenLines({ buckets, series }: { buckets: Bucket[]; series: Series[] }
           {buckets.map((b, i) => (
             <rect key={b.key} x={padL + slot * i} y={padT} width={slot} height={innerH} fill="transparent"
               onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} tabIndex={0}
-              aria-label={`${b.label}: ${series.map((s) => `${s.label} ${tok(b.tokenValues[s.id] ?? 0)}`).join(", ")}`} />
+              aria-label={`${b.label}: ${fmt(totals[i]!)}; ${series.map((s) => `${s.label} ${fmt(valuesOf(b)[s.id] ?? 0)}`).join(", ")}`} />
           ))}
         </svg>
       ) : <div style={{ height: H }} />}
       {hb ? (
         <div className="fc-tip" style={{ left: tipLeft, top: 0 }}>
-          <div className="fc-tip-row" style={{ marginBottom: 4 }}><b>{hb.label}</b><b>{tok(hbTotal)}</b></div>
-          {[...series].sort((a, b) => (hb.tokenValues[b.id] ?? 0) - (hb.tokenValues[a.id] ?? 0)).map((s) => (
+          <div className="fc-tip-row" style={{ marginBottom: 4 }}><b>{hb.label}</b><b>{fmt(totals[hover!]!)}</b></div>
+          {[...series].sort((a, b) => (valuesOf(hb)[b.id] ?? 0) - (valuesOf(hb)[a.id] ?? 0)).map((s) => (
             <div key={s.id} className="fc-tip-row">
               <span className="k"><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>
-              <span>{tok(hb.tokenValues[s.id] ?? 0)}</span>
+              <span>{fmt(valuesOf(hb)[s.id] ?? 0)}</span>
             </div>
           ))}
-          <div className="fc-tip-row fc-muted" style={{ marginTop: 4 }}><span>{usd(hb.totals.cost.total)}</span><span>{hb.totals.runs} runs</span></div>
+          <div className="fc-tip-row fc-muted" style={{ marginTop: 4 }}><span>{metric === "cost" ? `${tok(hb.totals.tokens.total)} tokens` : usd(hb.totals.cost.total)}</span><span>{hb.totals.runs} runs</span></div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function TimeChart({ kind, ...props }: { kind: ChartKind; buckets: Bucket[]; series: Series[]; metric: Metric; showTotal?: boolean }) {
+  return kind === "bars" ? <StackedBars {...props} /> : <LineChart {...props} />;
+}
+
+function Legend({ series, total }: { series: Series[]; total?: boolean }) {
+  return (
+    <div className="fc-legend">
+      {series.map((s) => <span key={s.id}><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>)}
+      {total ? <span><i style={{ width: 14, borderTop: "2px dashed var(--foreground)", opacity: 0.7 }} />Total</span> : null}
     </div>
   );
 }
@@ -364,6 +398,8 @@ export function FleetCostPage({ context }: PluginPageProps) {
   const [split, setSplit] = useState<Split>("kind");
   const [period, setPeriod] = useState<Period>("all");
   const [readsMode, setReadsMode] = useState<"with" | "without">("with");
+  const [costKind, setCostKind] = useChartKind("cost", "bars");
+  const [tokenKind, setTokenKind] = useChartKind("tokens", "lines");
   const today = localToday();
 
   const view = useMemo(() => {
@@ -482,11 +518,12 @@ export function FleetCostPage({ context }: PluginPageProps) {
           </div>
 
           <section className="fc-card" aria-label="Cost over time">
-            <h2>Cost over time</h2>
-            <div className="fc-legend">
-              {view.series.map((s) => <span key={s.id}><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>)}
+            <div className="fc-card-head">
+              <h2>Cost over time</h2>
+              <Seg label="Cost chart type" value={costKind} onChange={setCostKind} options={[["bars", "Bars"], ["lines", "Lines"]]} />
             </div>
-            <StackedBars buckets={view.buckets} series={view.series} metric="cost" />
+            <Legend series={view.series} total={costKind === "lines"} />
+            <TimeChart kind={costKind} buckets={view.buckets} series={view.series} metric="cost" showTotal />
           </section>
 
           <section className="fc-card" aria-label="Tokens over time">
@@ -495,12 +532,11 @@ export function FleetCostPage({ context }: PluginPageProps) {
               <div className="fc-controls">
                 <span className="fc-ctl-label">Cache reads</span>
                 <Seg label="Cache reads" value={readsMode} onChange={setReadsMode} options={[["with", "Include"], ["without", "Leave out"]]} />
+                <Seg label="Token chart type" value={tokenKind} onChange={setTokenKind} options={[["bars", "Bars"], ["lines", "Lines"]]} />
               </div>
             </div>
-            <div className="fc-legend">
-              {view.tokenSeries.map((s) => <span key={s.id}><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>)}
-            </div>
-            <TokenLines buckets={view.buckets} series={view.tokenSeries} />
+            <Legend series={view.tokenSeries} />
+            <TimeChart kind={tokenKind} buckets={view.buckets} series={view.tokenSeries} metric="tokens" />
             {readsMode === "with" ? (
               <p className="fc-foot" style={{ margin: 0 }}>
                 Cache reads are {pct(view.all.tokens.total ? view.all.tokens.cacheRead / view.all.tokens.total : 0)} of all tokens, so the other types barely show. Leave them out to compare those.
