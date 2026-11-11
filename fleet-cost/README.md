@@ -10,7 +10,7 @@ The plugin was called Fleet Cost; its ID (`nevysha.fleet-cost`) and page URL (`/
 
 ## Cost tab
 
-![The Fleet Cost page in dark mode, split by agent: totals and rates, cost over time as lines with a dashed total, tokens over time as lines with cache reads left out, then the per-agent, per-day and most expensive task breakdowns](docs/fleet-cost-view.png)
+![The Cost tab of Token Lens in dark mode, split by agent: totals and rates, cost over time as lines with a dashed total, tokens over time as lines with cache reads left out, then the per-agent and per-day breakdowns](docs/token-lens-cost.png)
 
 ### What it shows
 
