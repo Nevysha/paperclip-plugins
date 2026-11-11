@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useHostNavigation } from "@paperclipai/plugin-sdk/ui";
 import { daysBetween, weekKey, weeksBetween, type CacheTtl } from "../pricing.js";
-import { buildTasks, efficiencyOf, inMode, linesOf, type CommitRow, type DocMode, type IssueUsage, type TaskEfficiency } from "../lens.js";
+import { buildTasks, efficiencyOf, inMode, linesOf, totalsIn, type CommitRow, type DocMode, type IssueUsage, type TaskEfficiency } from "../lens.js";
 import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, pct, tok, usd, useChartKind, type Bucket, type Series } from "./common.js";
 import { inPeriod, type Period } from "./cost.js";
 
@@ -11,11 +11,11 @@ const MODE_LABEL: Record<DocMode, string> = { all: "All lines", code: "Without d
 const LINES_NOTE: Record<DocMode, string> = {
   all: "code and .md lines",
   code: "lines outside .md files",
-  docs: ".md lines, tasks that changed only docs",
+  docs: ".md lines",
 };
 type Sort = "perLine" | "cost" | "newest";
 
-const perLine = (t: TaskEfficiency, mode: DocMode) => { const l = linesOf(t, mode); return l ? t.t.tokens.total / l : 0; };
+const perLine = (t: TaskEfficiency, mode: DocMode) => { const l = linesOf(t, mode); return l ? totalsIn(t, mode).tokens.total / l : 0; };
 const short = (s: string | null, n = 60) => (s && s.length > n ? s.slice(0, n) + "…" : s ?? "");
 
 export function EfficiencyView({ data, ttl }: { data: EfficiencyData; ttl: CacheTtl }) {
@@ -60,7 +60,7 @@ export function EfficiencyView({ data, ttl }: { data: EfficiencyData; ttl: Cache
     const agentRows = [...agents].map(([name, ts]) => ({ name, ...efficiencyOf(ts, mode) })).sort((a, b) => b.t.cost.total - a.t.cost.total);
 
     const sorted = [...shown].sort((a, b) =>
-      sort === "perLine" ? perLine(b, mode) - perLine(a, mode) : sort === "cost" ? b.t.cost.total - a.t.cost.total : (a.mergedDay < b.mergedDay ? 1 : -1));
+      sort === "perLine" ? perLine(b, mode) - perLine(a, mode) : sort === "cost" ? totalsIn(b, mode).cost.total - totalsIn(a, mode).cost.total : (a.mergedDay < b.mergedDay ? 1 : -1));
     const commits = data.commits.filter((c) => c.mergedDay && keep(c.mergedDay));
     const matched = commits.filter((c) => c.matchMethod !== "none").length;
     return { eff, allModes, shown, sorted, buckets, series, agentRows, otherTokens, taskTokens, otherCount: otherUsage.length, commits: commits.length, matched, first };
@@ -105,7 +105,8 @@ export function EfficiencyView({ data, ttl }: { data: EfficiencyData; ttl: Cache
           </table>
         </div>
         <p className="fc-foot" style={{ margin: 0 }}>
-          A task that changed code and docs counts in &quot;All&quot; with every line and in &quot;Without docs&quot; with its code lines only, keeping all its tokens both times.
+          A task that changed code and docs is split between &quot;Without docs&quot; and &quot;Docs only&quot; by its line counts, tokens and cost included,
+          so the two add up to &quot;All lines&quot;. It counts as a task in both.
         </p>
       </section>
 
@@ -160,8 +161,8 @@ export function EfficiencyView({ data, ttl }: { data: EfficiencyData; ttl: Cache
                   <td className="fc-muted">{t.author ?? t.agents}</td>
                   <td className="fc-muted">{t.prs.map((n) => `#${n}`).join(" ")}</td>
                   <td className="fc-num" title={`${t.codeLines} code, ${t.docLines} doc lines; ${t.commits} commits`}>{linesOf(t, mode).toLocaleString("en-US")}</td>
-                  <td className="fc-num fc-muted">{tok(t.t.tokens.total)}</td>
-                  <td className="fc-num">{usd(t.t.cost.total)}</td>
+                  <td className="fc-num fc-muted">{tok(totalsIn(t, mode).tokens.total)}</td>
+                  <td className="fc-num">{usd(totalsIn(t, mode).cost.total)}</td>
                   <td className="fc-num">{tok(perLine(t, mode))}</td>
                 </tr>
               ))}

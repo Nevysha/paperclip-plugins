@@ -40,7 +40,7 @@ The plugin was called Fleet Cost; its ID (`nevysha.fleet-cost`) and page URL (`/
 - **Lines** are the additions and deletions of each merged PR's own commits, before the squash. Lockfiles and binary files are left out; `.md` and `.mdx` count as docs.
 - **Which task a commit belongs to:** the task of the run that made it. The collector finds that run through its `git commit` commands: the hash git printed, or else the commit's first line matched against the commit messages the runs used. Commits from before runs recorded tool calls (the `claude_local` night of Nov 8–9) and merge commits fall back to the task named in the PR title.
 - **A task's tokens** are every run on it, including reviews and retries on that task. Tasks that merged nothing (reviews on their own task, plans, questions, unmerged work) are shown as a share of tokens.
-- The three counts: **All lines** (code and docs); **Without docs** (code lines only, tasks that changed code; a mixed task keeps all its tokens); **Docs only** (tasks that changed nothing but `.md`).
+- The three counts: **All lines** (code and docs); **Without docs** (lines outside `.md`); **Docs only** (`.md` lines). A task that changed both is split by its line counts: its tokens and cost go to each count in proportion to that count's lines. So without docs plus docs only is exactly all lines, in lines, tokens and cost. Within one such task, a doc line and a code line cost the same.
 - Line counts are a rough measure of work: good for trends and outliers, not for ranking agents against each other.
 
 ## The collector
