@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Starts Paperclip detached from the terminal that ran this, so closing that
+# terminal (or ending a Claude Code session) leaves it running. Stop it with
+# paperclip-stop.
+#
+# ~/paperclip-current picks what runs:
+#   - a release folder (~/paperclip-releases/<sha>, built with `pnpm build` and
+#     `pnpm --filter @paperclipai/server build:runtime`): runs the bundled server,
+#     `node server/dist-runtime/index.mjs` as in the official image, with the
+#     release's own runner. (server/dist/index.js can't run inside the monorepo: the
+#     workspace packages point at their TypeScript sources.)
+#   - ~/paperclip itself: the old `pnpm dev:once` setup with the Nov 6 runner, kept as
+#     the rollback target from before the switch to real builds.
+#
+# Migrations never run here: the built server refuses to start while any are pending
+# (PAPERCLIP_MIGRATION_PROMPT=never). paperclip-update applies them after a backup.
+set -euo pipefail
+
+DATA="$HOME/.paperclip-dev"
+CURRENT="$HOME/paperclip-current"
+DEV_REPO="$HOME/paperclip"
+PORT="${PAPERCLIP_PORT:-3100}"
+PIDFILE="$DATA/paperclip.pid"
+LOG="$DATA/logs/paperclip.log"
+HEALTH="http://localhost:$PORT/api/health"
+WAIT_SECONDS=300
+
+if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then
+  echo "Paperclip is already running: http://localhost:$PORT"
+  exit 0
+fi
+if ss -ltnH "sport = :$PORT" | grep -q .; then
+  echo "Port $PORT is in use by something that isn't answering as Paperclip:" >&2
+  ss -ltnpH "sport = :$PORT" >&2
+  exit 1
+fi
+
+if [ ! -L "$CURRENT" ]; then
+  echo "$CURRENT is missing: point it at a release folder or at $DEV_REPO." >&2
+  exit 1
+fi
+REL="$(readlink -f "$CURRENT")"
+if [ "$REL" = "$DEV_REPO" ]; then
+  mode=dev
+elif [ -f "$REL/server/dist-runtime/index.mjs" ] && [ -f "$REL/ui/dist/index.html" ]; then
+  mode=release
+else
+  echo "$CURRENT -> $REL isn't a built release (no server/dist-runtime/index.mjs or ui/dist/index.html)." >&2
+  exit 1
+fi
+
+# Keep the previous run's log. Mode 600: logs can hold task content.
+mkdir -p "$(dirname "$LOG")"
+[ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"
+install -m 600 /dev/null "$LOG"
+
+# Start from a clean environment. Agents inherit Paperclip's, so anything set by
+# the caller (a Claude Code session sets CLAUDECODE and friends) would reach
+# every agent run.
+keep=(HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" SHELL="${SHELL:-/bin/bash}"
+      PATH="$PATH" TERM=dumb)
+for name in LANG LANGUAGE LC_ALL NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_RUNTIME_DIR \
+            DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK DISPLAY WAYLAND_DISPLAY; do
+  [ -n "${!name:-}" ] && keep+=("$name=${!name}")
+done
+
+rm -f "$PIDFILE"
+if [ "$mode" = dev ]; then
+  keep+=(PAPERCLIP_RUNNER_BINARY="$DATA/runner/paperclip-runnerd")
+  cd "$DEV_REPO"
+  env -i "${keep[@]}" setsid nohup bash -c \
+    'echo $$ > "$1"; umask 022; exec pnpm dev:once --data-dir "$2"' \
+    paperclip "$PIDFILE" "$DATA" </dev/null >>"$LOG" 2>&1 &
+else
+  # What `pnpm dev:once --data-dir ~/.paperclip-dev` set, plus production mode as in
+  # the official image. No PAPERCLIP_RUNNER_BINARY: the server uses the runner that
+  # the release's build staged, so server and runner always match.
+  keep+=(NODE_ENV=production
+         PAPERCLIP_HOME="$DATA"
+         PAPERCLIP_INSTANCE_ID=default
+         PAPERCLIP_CONFIG="$DATA/instances/default/config.json"
+         PAPERCLIP_CONTEXT="$DATA/context.json"
+         PAPERCLIP_MIGRATION_PROMPT=never
+         PAPERCLIP_MIGRATION_AUTO_APPLY=false)
+  cd "$REL"
+  # Since 2026-11 the server exits with code 1 when it loses its instance lease
+  # (for example, the database stalled for over 60 s) and expects a supervisor to
+  # restart it. This loop is that supervisor: it restarts on code 1 only, at most
+  # 3 times in 10 minutes. paperclip-stop's SIGTERM ends the loop too.
+  env -i "${keep[@]}" setsid nohup bash -c '
+    echo $$ > "$1"; umask 022
+    n=0; window=$(date +%s)
+    while :; do
+      code=0; node server/dist-runtime/index.mjs || code=$?
+      [ "$code" -eq 1 ] || exit "$code"
+      now=$(date +%s)
+      if (( now - window > 600 )); then n=0; window=$now; fi
+      n=$((n + 1))
+      if (( n > 3 )); then
+        echo "[paperclip-start] the server exited with code 1 four times in 10 minutes; giving up"
+        exit 1
+      fi
+      echo "[paperclip-start] the server exited with code 1; restarting in 10 s ($n/3)"
+      sleep 10
+    done' paperclip "$PIDFILE" </dev/null >>"$LOG" 2>&1 &
+fi
+
+echo -n "Starting Paperclip ($mode: $REL)"
+for ((i = 0; i < WAIT_SECONDS; i += 2)); do
+  sleep 2
+  echo -n "."
+  if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then
+    echo
+    echo "Paperclip is running: http://localhost:$PORT"
+    echo "PID $(cat "$PIDFILE"), log $LOG"
+    exit 0
+  fi
+  if [ -s "$PIDFILE" ] && ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo
+    echo "Paperclip exited during startup. Last log lines ($LOG):" >&2
+    tail -n 30 "$LOG" >&2
+    rm -f "$PIDFILE"
+    exit 1
+  fi
+done
+echo
+echo "Paperclip didn't answer within ${WAIT_SECONDS}s and is still starting or stuck. See $LOG" >&2
+exit 1

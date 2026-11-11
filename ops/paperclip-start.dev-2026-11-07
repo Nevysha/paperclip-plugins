@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Starts Paperclip detached from the terminal that ran this, so closing that
+# terminal (or ending a Claude Code session) leaves it running. Stop it with
+# paperclip-stop.
+set -euo pipefail
+
+REPO="$HOME/paperclip"
+DATA="$HOME/.paperclip-dev"
+PORT="${PAPERCLIP_PORT:-3100}"
+PIDFILE="$DATA/paperclip.pid"
+LOG="$DATA/logs/paperclip.log"
+HEALTH="http://localhost:$PORT/api/health"
+WAIT_SECONDS=300
+
+if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then
+  echo "Paperclip is already running: http://localhost:$PORT"
+  exit 0
+fi
+if ss -ltnH "sport = :$PORT" | grep -q .; then
+  echo "Port $PORT is in use by something that isn't answering as Paperclip:" >&2
+  ss -ltnpH "sport = :$PORT" >&2
+  exit 1
+fi
+
+# Keep the previous run's log. Mode 600: logs can hold task content.
+mkdir -p "$(dirname "$LOG")"
+[ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"
+install -m 600 /dev/null "$LOG"
+
+# Start from a clean environment. Agents inherit Paperclip's, so anything set by
+# the caller (a Claude Code session sets CLAUDECODE and friends) would reach
+# every agent run.
+keep=(HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" SHELL="${SHELL:-/bin/bash}"
+      PATH="$PATH" TERM=dumb PAPERCLIP_RUNNER_BINARY="$DATA/runner/paperclip-runnerd")
+for name in LANG LANGUAGE LC_ALL NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_RUNTIME_DIR \
+            DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK DISPLAY WAYLAND_DISPLAY; do
+  [ -n "${!name:-}" ] && keep+=("$name=${!name}")
+done
+
+cd "$REPO"
+rm -f "$PIDFILE"
+env -i "${keep[@]}" setsid nohup bash -c \
+  'echo $$ > "$1"; umask 022; exec pnpm dev:once --data-dir "$2"' \
+  paperclip "$PIDFILE" "$DATA" </dev/null >>"$LOG" 2>&1 &
+
+echo -n "Starting Paperclip"
+for ((i = 0; i < WAIT_SECONDS; i += 2)); do
+  sleep 2
+  echo -n "."
+  if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then
+    echo
+    echo "Paperclip is running: http://localhost:$PORT"
+    echo "PID $(cat "$PIDFILE"), log $LOG"
+    exit 0
+  fi
+  if [ -s "$PIDFILE" ] && ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo
+    echo "Paperclip exited during startup. Last log lines ($LOG):" >&2
+    tail -n 30 "$LOG" >&2
+    rm -f "$PIDFILE"
+    exit 1
+  fi
+done
+echo
+echo "Paperclip didn't answer within ${WAIT_SECONDS}s and is still starting or stuck. See $LOG" >&2
+exit 1

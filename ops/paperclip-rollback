@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Puts Paperclip back to the state saved by paperclip-update.
+#
+#   paperclip-rollback ~/backups/paperclip-<date>-<old> [--force] [--plugins <dir>]
+#
+# Steps, stopping at the first error:
+#   1. stop the watchdog timer, then paperclip-stop (--force is passed on to it);
+#   2. move the current db/ aside to db.rolled-back-<date> (never deleted here),
+#      and copy the backup's db/ back (migrations can't be undone, so the database
+#      has to come from the backup);
+#   3. with --plugins, copy each plugin's dist/, .paperclip-sdk/ and pnpm-lock.yaml
+#      back from that folder (~/backups/paperclip-plugins-2026-11-11-pre-update
+#      holds the builds from before the 2026-11-11 SDK update);
+#   4. point ~/paperclip-current back at the previous release (or ~/paperclip for
+#      the old pnpm dev:once setup), then paperclip-start.
+# Anything written to Paperclip after the backup is lost.
+# The watchdog timer stays stopped afterwards.
+set -euo pipefail
+
+DATA="$HOME/.paperclip-dev"
+INSTANCE="$DATA/instances/default"
+CURRENT="$HOME/paperclip-current"
+PLUGINS="$HOME/projects/paperclip-plugins"
+HISTORY="$DATA/version-history.log"
+BIN="$(dirname "$(readlink -f "$0")")"
+
+die() { echo "paperclip-rollback: $*" >&2; exit 1; }
+usage() { echo "Usage: paperclip-rollback <backup-dir> [--force] [--plugins <dir>]" >&2; exit 64; }
+
+[ $# -ge 1 ] || usage
+BACKUP="$(readlink -f "$1")"; shift
+force=(); plugin_backup=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) force=(--force) ;;
+    --plugins) [ $# -ge 2 ] || usage; plugin_backup="$(readlink -f "$2")"; shift ;;
+    *) usage ;;
+  esac
+  shift
+done
+
+[ -f "$BACKUP/backup-info" ] && [ -d "$BACKUP/db" ] || die "$BACKUP isn't a paperclip-update backup."
+PREV="$(sed -n 's/^previous=//p' "$BACKUP/backup-info")"
+[ -d "$PREV" ] || die "the previous release $PREV no longer exists."
+[ -z "$plugin_backup" ] || [ -d "$plugin_backup" ] || die "$plugin_backup doesn't exist."
+echo "Rolling back to $PREV with the database from $BACKUP"
+
+# 1. Stop
+systemctl --user stop paperclip-watchdog.timer
+"$BIN/paperclip-stop" "${force[@]}" || die "paperclip-stop refused or failed; nothing was changed. The watchdog timer is stopped."
+for port in 3100 54329; do
+  if ss -ltnH "sport = :$port" | grep -q .; then die "port $port is still in use."; fi
+done
+if [ -e "$INSTANCE/db/postmaster.pid" ]; then
+  die "$INSTANCE/db/postmaster.pid exists: the database didn't shut down cleanly."
+fi
+
+# 2. Database
+aside="$INSTANCE/db.rolled-back-$(date +%Y%m%d-%H%M)"
+mv "$INSTANCE/db" "$aside"
+cp -a "$BACKUP/db" "$INSTANCE/db"
+echo "Database restored. The replaced one is in $aside (delete it once you're sure)."
+
+# 3. Plugins
+if [ -n "$plugin_backup" ]; then
+  for dir in "$plugin_backup"/*/; do
+    p="$(basename "$dir")"
+    [ -d "$PLUGINS/$p" ] || continue
+    rm -rf "$PLUGINS/$p/dist" "$PLUGINS/$p/.paperclip-sdk"
+    cp -a "$dir/dist" "$dir/.paperclip-sdk" "$PLUGINS/$p/"
+    if [ -f "$dir/pnpm-lock.yaml" ]; then cp -a "$dir/pnpm-lock.yaml" "$PLUGINS/$p/"; fi
+    echo "Plugin $p restored."
+  done
+fi
+
+# 4. Switch back and start
+ln -sfn "$PREV" "$CURRENT.tmp" && mv -Tf "$CURRENT.tmp" "$CURRENT"
+echo "$CURRENT -> $PREV"
+"$BIN/paperclip-start" || die "Paperclip didn't start. Logs: $DATA/logs/paperclip.log"
+
+echo "$(date -Is) rollback -> $PREV backup=$BACKUP${plugin_backup:+ plugins=$plugin_backup}" >> "$HISTORY"
+echo
+echo "Rolled back. The watchdog timer is still stopped. After checking, start it with:"
+echo "  systemctl --user start paperclip-watchdog.timer"
