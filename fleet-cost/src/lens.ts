@@ -78,7 +78,10 @@ export type CommitRow = {
   issueId: string | null; agentId: string | null; agentName: string | null;
 };
 
-/** all: every line; code: lines outside .md, tasks that changed code; docs: tasks that changed only .md. */
+/**
+ * all: every line; code: lines outside .md; docs: .md lines. A task that changed both is
+ * split by its line counts, tokens and cost included, so "code" plus "docs" is "all".
+ */
 export type DocMode = "all" | "code" | "docs";
 
 export type TaskEfficiency = {
@@ -134,9 +137,23 @@ export function linesOf(t: TaskEfficiency, mode: DocMode): number {
 }
 
 export function inMode(t: TaskEfficiency, mode: DocMode): boolean {
-  if (mode === "code") return t.codeLines > 0;
-  if (mode === "docs") return t.codeLines === 0 && t.docLines > 0;
-  return t.codeLines + t.docLines > 0;
+  return linesOf(t, mode) > 0;
+}
+
+/** The part of a task's usage that goes with the lines counted: its share of the task's lines. */
+export function shareOf(t: TaskEfficiency, mode: DocMode): number {
+  const all = t.codeLines + t.docLines;
+  return all > 0 ? linesOf(t, mode) / all : 0;
+}
+
+function scale<T extends Record<string, number>>(x: T, f: number): T {
+  return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v * f])) as T;
+}
+
+/** A task's tokens and cost for the lines counted. Runs aren't split: a run that changed both counts in both. */
+export function totalsIn(t: TaskEfficiency, mode: DocMode): Totals {
+  const f = shareOf(t, mode);
+  return f === 1 ? t.t : { cost: scale(t.t.cost, f), tokens: scale(t.t.tokens, f), runs: t.t.runs };
 }
 
 export type Efficiency = { tasks: number; lines: number; t: Totals; tokensPerLine: number; costPerLine: number };
@@ -149,7 +166,8 @@ export function efficiencyOf(tasks: TaskEfficiency[], mode: DocMode): Efficiency
     if (!inMode(x, mode)) continue;
     n++;
     lines += linesOf(x, mode);
-    t = { cost: addCost(t.cost, x.t.cost), tokens: addTokens(t.tokens, x.t.tokens), runs: t.runs + x.t.runs };
+    const part = totalsIn(x, mode);
+    t = { cost: addCost(t.cost, part.cost), tokens: addTokens(t.tokens, part.tokens), runs: t.runs + part.runs };
   }
   return { tasks: n, lines, t, tokensPerLine: lines ? t.tokens.total / lines : 0, costPerLine: lines ? t.cost.total / lines : 0 };
 }
