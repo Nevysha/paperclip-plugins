@@ -32,6 +32,10 @@ Where the fleet's Claude tokens go. One page with three tabs: **Cost** (what the
 
 ![The Cost tab of Token Lens in dark mode, split by agent, with cost totals and daily cost and token line charts](fleet-cost/docs/token-lens-cost.png)
 
+![The Tools tab of Token Lens in dark mode: tool calls, runs over 100 calls, starting context, the most expensive tool, and the table of where the tokens go, with Bash split by command](fleet-cost/docs/token-lens-tools.png)
+
+![The Efficiency tab of Token Lens in dark mode, without docs: tokens per line, cost per 100 lines, lines changed, the share of tokens on tasks that merged nothing, and the three counts side by side](fleet-cost/docs/token-lens-efficiency.png)
+
 ## [`dependency-graph`](dependency-graph/README.md)
 
 A **Dependencies** page drawing which tasks wait on which as a graph, flagging stale waits, loops and the tasks holding up the most work. There's also a header button with the number of stale waits.
