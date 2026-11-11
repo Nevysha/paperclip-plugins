@@ -36,7 +36,7 @@ A **Fleet Cost** page showing what the fleet's Claude usage would cost at API pr
 
 A **Dependencies** page drawing which tasks wait on which as a graph, flagging stale waits, loops and the tasks holding up the most work. There's also a header button with the number of stale waits.
 
-![The Dependencies page in dark mode, with one task's chain lit up and its details in the side panel](dependency-graph/docs/dependency-graph.png)
+![The Dependencies page in dark mode, with chains of tasks coloured by status and the Needs attention panel](dependency-graph/docs/dependency-graph.png)
 
 ## Setup
 
