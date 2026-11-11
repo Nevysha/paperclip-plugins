@@ -26,6 +26,12 @@ A **Watchdog** button in the header showing whether the watchdog (a timer outsid
 
 ![The Watchdog button in the header, open on a panel that says All clear, with a Pause button and recent actions](watchdog/docs/watchdog-panel.png)
 
+## [`fleet-cost`](fleet-cost/README.md)
+
+A **Fleet Cost** page showing what the fleet's Claude usage would cost at API prices, per day, week, month, agent and task, with token usage. There's also a header button with today's cost.
+
+![The Fleet Cost page in dark mode, with cost totals, a daily cost chart split by token type, and the per-agent breakdown](fleet-cost/docs/fleet-cost.png)
+
 ## Setup
 
 Each plugin is its own package. Paperclip loads it from its folder, so after a fresh clone, run this in the folder and then install it:
