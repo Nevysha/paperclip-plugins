@@ -65,9 +65,10 @@ export function usd(v: number): string {
   if (v < 100) return `$${v.toFixed(2)}`;
   return `$${Math.round(v).toLocaleString("en-US")}`;
 }
+const trim = (s: string) => s.replace(/\.0+$/, "");
 export function tok(v: number): string {
-  if (v >= 1e9) return `${(v / 1e9).toFixed(v >= 1e10 ? 1 : 2)}B`;
-  if (v >= 1e6) return `${(v / 1e6).toFixed(v >= 1e8 ? 0 : 1)}M`;
+  if (v >= 1e9) return `${trim((v / 1e9).toFixed(v >= 1e10 ? 1 : 2))}B`;
+  if (v >= 1e6) return `${trim((v / 1e6).toFixed(v >= 1e8 ? 0 : 1))}M`;
   if (v >= 1e3) return `${(v / 1e3).toFixed(0)}k`;
   return String(Math.round(v));
 }
@@ -186,15 +187,18 @@ function topRounded(x: number, y: number, w: number, h: number, r: number) {
 // ---------------------------------------------------------------- stacked bar chart
 
 type Series = { id: string; label: string; color: string };
-type Bucket = { key: string; label: string; values: Record<string, number>; totals: Totals };
+type Bucket = { key: string; label: string; values: Record<string, number>; tokenValues: Record<string, number>; totals: Totals };
+type Metric = "cost" | "tokens";
 
-function StackedBars({ buckets, series }: { buckets: Bucket[]; series: Series[] }) {
+function StackedBars({ buckets, series, metric }: { buckets: Bucket[]; series: Series[]; metric: Metric }) {
+  const fmt = metric === "cost" ? usd : tok;
+  const valuesOf = (b: Bucket) => (metric === "cost" ? b.values : b.tokenValues);
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
   const H = 260, padL = 52, padB = 24, padT = 8;
   const innerW = Math.max(0, width - padL - 4);
   const innerH = H - padB - padT;
-  const sums = buckets.map((b) => series.reduce((s, x) => s + (b.values[x.id] ?? 0), 0));
+  const sums = buckets.map((b) => series.reduce((s, x) => s + (valuesOf(b)[x.id] ?? 0), 0));
   const { max, step } = niceMax(Math.max(0, ...sums));
   const slot = buckets.length ? innerW / buckets.length : 0;
   const barW = Math.max(2, Math.min(48, slot * 0.7));
@@ -209,17 +213,17 @@ function StackedBars({ buckets, series }: { buckets: Bucket[]; series: Series[] 
   return (
     <div className="fc-chart" ref={ref} onMouseLeave={() => setHover(null)}>
       {width > 0 ? (
-        <svg width={width} height={H} role="img" aria-label="Cost at API prices over time">
+        <svg width={width} height={H} role="img" aria-label={metric === "cost" ? "Cost at API prices over time" : "Tokens over time"}>
           {ticks.map((t) => (
             <g key={t}>
               <line x1={padL} x2={width - 4} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
-              <text className="fc-axis" x={padL - 8} y={y(t) + 4} textAnchor="end">{usd(t)}</text>
+              <text className="fc-axis" x={padL - 8} y={y(t) + 4} textAnchor="end">{fmt(t)}</text>
             </g>
           ))}
           {buckets.map((b, i) => {
             const cx = padL + slot * i + slot / 2;
             let acc = 0;
-            const segs = series.map((s) => ({ s, v: b.values[s.id] ?? 0 })).filter((x) => x.v > 0);
+            const segs = series.map((s) => ({ s, v: valuesOf(b)[s.id] ?? 0 })).filter((x) => x.v > 0);
             return (
               <g key={b.key} opacity={hover == null || hover === i ? 1 : 0.45}>
                 {segs.map(({ s, v }, j) => {
@@ -235,7 +239,7 @@ function StackedBars({ buckets, series }: { buckets: Bucket[]; series: Series[] 
                 {i % every === 0 ? <text className="fc-axis" x={cx} y={H - 6} textAnchor="middle">{b.label}</text> : null}
                 <rect x={padL + slot * i} y={padT} width={slot} height={innerH} fill="transparent"
                   onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} tabIndex={0}
-                  aria-label={`${b.label}: ${usd(sums[i]!)}`} />
+                  aria-label={`${b.label}: ${fmt(sums[i]!)}`} />
               </g>
             );
           })}
@@ -243,14 +247,84 @@ function StackedBars({ buckets, series }: { buckets: Bucket[]; series: Series[] 
       ) : <div style={{ height: H }} />}
       {hb ? (
         <div className="fc-tip" style={{ left: tipLeft, top: 0 }}>
-          <div className="fc-tip-row" style={{ marginBottom: 4 }}><b>{hb.label}</b><b>{usd(sums[hover!]!)}</b></div>
-          {[...series].reverse().filter((s) => (hb.values[s.id] ?? 0) > 0).map((s) => (
+          <div className="fc-tip-row" style={{ marginBottom: 4 }}><b>{hb.label}</b><b>{fmt(sums[hover!]!)}</b></div>
+          {[...series].reverse().filter((s) => (valuesOf(hb)[s.id] ?? 0) > 0).map((s) => (
             <div key={s.id} className="fc-tip-row">
               <span className="k"><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>
-              <span>{usd(hb.values[s.id]!)}</span>
+              <span>{fmt(valuesOf(hb)[s.id]!)}</span>
             </div>
           ))}
-          <div className="fc-tip-row fc-muted" style={{ marginTop: 4 }}><span>{tok(hb.totals.tokens.total)} tokens</span><span>{hb.totals.runs} runs</span></div>
+          <div className="fc-tip-row fc-muted" style={{ marginTop: 4 }}><span>{metric === "cost" ? `${tok(hb.totals.tokens.total)} tokens` : usd(hb.totals.cost.total)}</span><span>{hb.totals.runs} runs</span></div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- line chart (tokens)
+
+/** One line per series from a shared zero baseline; points sit at the same x as the bars above. */
+function TokenLines({ buckets, series }: { buckets: Bucket[]; series: Series[] }) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+  const H = 260, padL = 52, padB = 24, padT = 8;
+  const innerW = Math.max(0, width - padL - 4);
+  const innerH = H - padB - padT;
+  const { max, step } = niceMax(Math.max(0, ...buckets.flatMap((b) => series.map((s) => b.tokenValues[s.id] ?? 0))));
+  const slot = buckets.length ? innerW / buckets.length : 0;
+  const x = (i: number) => padL + slot * i + slot / 2;
+  const y = (v: number) => padT + innerH - (v / max) * innerH;
+  const every = Math.max(1, Math.ceil((buckets.length * 52) / Math.max(1, innerW)));
+  const markers = buckets.length <= 31;
+  const ticks: number[] = [];
+  for (let t = 0; t <= max + 1e-9; t += step) ticks.push(t);
+
+  const hb = hover != null ? buckets[hover] : null;
+  const tipLeft = hover != null ? Math.min(Math.max(0, x(hover) - 100), Math.max(0, width - 210)) : 0;
+  const hbTotal = hb ? series.reduce((s, x) => s + (hb.tokenValues[x.id] ?? 0), 0) : 0;
+
+  return (
+    <div className="fc-chart" ref={ref} onMouseLeave={() => setHover(null)}>
+      {width > 0 ? (
+        <svg width={width} height={H} role="img" aria-label="Tokens over time">
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={padL} x2={width - 4} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
+              <text className="fc-axis" x={padL - 8} y={y(t) + 4} textAnchor="end">{tok(t)}</text>
+            </g>
+          ))}
+          {buckets.map((b, i) => (i % every === 0
+            ? <text key={b.key} className="fc-axis" x={x(i)} y={H - 6} textAnchor="middle">{b.label}</text>
+            : null))}
+          {hover != null ? <line x1={x(hover)} x2={x(hover)} y1={padT} y2={padT + innerH} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" /> : null}
+          {series.map((s) => {
+            const pts = buckets.map((b, i) => `${x(i)},${y(b.tokenValues[s.id] ?? 0)}`);
+            return (
+              <g key={s.id}>
+                <path d={`M${pts.join("L")}`} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                {buckets.map((b, i) => (markers || hover === i
+                  ? <circle key={b.key} cx={x(i)} cy={y(b.tokenValues[s.id] ?? 0)} r={hover === i ? 5 : 4} fill={s.color} stroke="var(--card)" strokeWidth={2} />
+                  : null))}
+              </g>
+            );
+          })}
+          {buckets.map((b, i) => (
+            <rect key={b.key} x={padL + slot * i} y={padT} width={slot} height={innerH} fill="transparent"
+              onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} tabIndex={0}
+              aria-label={`${b.label}: ${series.map((s) => `${s.label} ${tok(b.tokenValues[s.id] ?? 0)}`).join(", ")}`} />
+          ))}
+        </svg>
+      ) : <div style={{ height: H }} />}
+      {hb ? (
+        <div className="fc-tip" style={{ left: tipLeft, top: 0 }}>
+          <div className="fc-tip-row" style={{ marginBottom: 4 }}><b>{hb.label}</b><b>{tok(hbTotal)}</b></div>
+          {[...series].sort((a, b) => (hb.tokenValues[b.id] ?? 0) - (hb.tokenValues[a.id] ?? 0)).map((s) => (
+            <div key={s.id} className="fc-tip-row">
+              <span className="k"><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>
+              <span>{tok(hb.tokenValues[s.id] ?? 0)}</span>
+            </div>
+          ))}
+          <div className="fc-tip-row fc-muted" style={{ marginTop: 4 }}><span>{usd(hb.totals.cost.total)}</span><span>{hb.totals.runs} runs</span></div>
         </div>
       ) : null}
     </div>
@@ -289,9 +363,11 @@ export function FleetCostPage({ context }: PluginPageProps) {
   const [grain, setGrain] = useState<Grain>("day");
   const [split, setSplit] = useState<Split>("kind");
   const [period, setPeriod] = useState<Period>("all");
+  const [readsMode, setReadsMode] = useState<"with" | "without">("with");
   const today = localToday();
 
   const view = useMemo(() => {
+    const showReads = readsMode === "with";
     if (!data) return null;
     const rows = data.rows;
     const sel = (f: (d: string) => boolean) => rows.filter((r) => f(r.day));
@@ -327,16 +403,22 @@ export function FleetCostPage({ context }: PluginPageProps) {
     const buckets: Bucket[] = keys.map((k) => {
       const rs = bucketMap.get(k) ?? [];
       const values: Record<string, number> = {};
+      const tokenValues: Record<string, number> = {};
       for (const r of rs) {
         const c = costOf(r, ttl);
+        const t = tokensOf(r);
         if (split === "kind") {
-          for (const s of KIND_SERIES) values[s.id] = (values[s.id] ?? 0) + c[s.id as "input"];
+          for (const s of KIND_SERIES) {
+            values[s.id] = (values[s.id] ?? 0) + c[s.id as "input"];
+            tokenValues[s.id] = (tokenValues[s.id] ?? 0) + t[s.id as "input"];
+          }
         } else {
           const id = colourOf.has(r.agentId ?? "none") ? (r.agentId ?? "none") : "other";
           values[id] = (values[id] ?? 0) + c.total;
+          tokenValues[id] = (tokenValues[id] ?? 0) + t.total - (showReads ? 0 : t.cacheRead);
         }
       }
-      return { key: k, label: label(k), values, totals: total(rs, ttl) };
+      return { key: k, label: label(k), values, tokenValues, totals: total(rs, ttl) };
     });
 
     // Period breakdowns
@@ -353,8 +435,9 @@ export function FleetCostPage({ context }: PluginPageProps) {
       .sort((a, b) => b.t.cost.total - a.t.cost.total);
     const days = [...groupBy(pRows, (r) => r.day as string, ttl)].sort((a, b) => (a[0] < b[0] ? 1 : -1));
 
-    return { all, todayT, weekT, monthT, last7, days7, projection, monthDays, unknownModels, series, buckets, pTotal, agents, tasks, days, firstDay };
-  }, [data, ttl, grain, split, period, today]);
+    const tokenSeries = split === "kind" && !showReads ? series.filter((x) => x.id !== "cacheRead") : series;
+    return { tokenSeries, all, todayT, weekT, monthT, last7, days7, projection, monthDays, unknownModels, series, buckets, pTotal, agents, tasks, days, firstDay };
+  }, [data, ttl, grain, split, period, today, readsMode]);
 
   return (
     <main className="fc-root">
@@ -391,18 +474,38 @@ export function FleetCostPage({ context }: PluginPageProps) {
               note={`of tokens, ${pct(view.all.cost.total ? view.all.cost.cacheRead / view.all.cost.total : 0)} of cost`} />
           </section>
 
+          <div className="fc-controls" role="group" aria-label="Chart options">
+            <span className="fc-ctl-label">Charts by</span>
+            <Seg label="Group by" value={grain} onChange={setGrain} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} />
+            <span className="fc-ctl-label">split by</span>
+            <Seg label="Split by" value={split} onChange={setSplit} options={[["kind", "Token type"], ["agent", "Agent"]]} />
+          </div>
+
           <section className="fc-card" aria-label="Cost over time">
-            <div className="fc-card-head">
-              <h2>Cost over time</h2>
-              <div className="fc-controls">
-                <Seg label="Group by" value={grain} onChange={setGrain} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} />
-                <Seg label="Split by" value={split} onChange={setSplit} options={[["kind", "Token type"], ["agent", "Agent"]]} />
-              </div>
-            </div>
+            <h2>Cost over time</h2>
             <div className="fc-legend">
               {view.series.map((s) => <span key={s.id}><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>)}
             </div>
-            <StackedBars buckets={view.buckets} series={view.series} />
+            <StackedBars buckets={view.buckets} series={view.series} metric="cost" />
+          </section>
+
+          <section className="fc-card" aria-label="Tokens over time">
+            <div className="fc-card-head">
+              <h2>Tokens over time</h2>
+              <div className="fc-controls">
+                <span className="fc-ctl-label">Cache reads</span>
+                <Seg label="Cache reads" value={readsMode} onChange={setReadsMode} options={[["with", "Include"], ["without", "Leave out"]]} />
+              </div>
+            </div>
+            <div className="fc-legend">
+              {view.tokenSeries.map((s) => <span key={s.id}><i className="fc-sw" style={{ background: s.color }} />{s.label}</span>)}
+            </div>
+            <TokenLines buckets={view.buckets} series={view.tokenSeries} />
+            {readsMode === "with" ? (
+              <p className="fc-foot" style={{ margin: 0 }}>
+                Cache reads are {pct(view.all.tokens.total ? view.all.tokens.cacheRead / view.all.tokens.total : 0)} of all tokens, so the other types barely show. Leave them out to compare those.
+              </p>
+            ) : null}
           </section>
 
           <div className="fc-controls" role="group" aria-label="Period for the breakdowns below">

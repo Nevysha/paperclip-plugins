@@ -30,7 +30,7 @@ A **Watchdog** button in the header showing whether the watchdog (a timer outsid
 
 A **Fleet Cost** page showing what the fleet's Claude usage would cost at API prices, per day, week, month, agent and task, with token usage. There's also a header button with today's cost.
 
-![The Fleet Cost page in dark mode, with cost totals, a daily cost chart split by token type, and the per-agent breakdown](fleet-cost/docs/fleet-cost.png)
+![The Fleet Cost page in dark mode, with cost totals, a daily cost bar chart and a daily tokens line chart, both split by token type](fleet-cost/docs/fleet-cost.png)
 
 ## Setup
 
