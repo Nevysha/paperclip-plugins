@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Switches the live Paperclip to a built release folder, with a backup first.
+#
+#   paperclip-update ~/paperclip-releases/<sha>
+#
+# Steps, stopping at the first error:
+#   1. check the release is built (server, UI, staged runner);
+#   2. stop the watchdog timer, then paperclip-stop (safe: refuses while agent runs
+#      are live or queued; then the timer is started again and nothing changes);
+#   3. check that ports 3100 and 54329 are free and the database is shut down;
+#   4. back up db/, .env, config.json and secrets/ to ~/backups/paperclip-<date>-<old>/;
+#   5. apply the release's migrations (pnpm db:migrate);
+#   6. point ~/paperclip-current at the release, then paperclip-start;
+#   7. add a line to ~/.paperclip-dev/version-history.log.
+# The watchdog timer stays stopped afterwards, for a manual check first.
+# Undo with: paperclip-rollback ~/backups/paperclip-<date>-<old>
+set -euo pipefail
+
+DATA="$HOME/.paperclip-dev"
+INSTANCE="$DATA/instances/default"
+CURRENT="$HOME/paperclip-current"
+DEV_REPO="$HOME/paperclip"
+HISTORY="$DATA/version-history.log"
+BIN="$(dirname "$(readlink -f "$0")")"
+
+die() { echo "paperclip-update: $*" >&2; exit 1; }
+
+[ $# -eq 1 ] || { echo "Usage: paperclip-update <release-dir>" >&2; exit 64; }
+REL="$(readlink -f "$1")"
+
+# 1. The release
+for f in server/dist-runtime/index.mjs server/dist/build-info.json ui/dist/index.html \
+         server/dist/vendor/paperclip-runner/bin/paperclip-runnerd; do
+  [ -e "$REL/$f" ] || die "$REL isn't a complete build: $f is missing."
+done
+new_sha="$(git -C "$REL" rev-parse --short HEAD)"
+if [ -L "$CURRENT" ]; then OLD="$(readlink -f "$CURRENT")"; else OLD="$DEV_REPO"; fi
+[ "$OLD" != "$REL" ] || die "$REL is already the current release."
+old_sha="$(git -C "$OLD" rev-parse --short HEAD)"
+if [ "$OLD" = "$DEV_REPO" ]; then old_label="dev-$old_sha"; else old_label="$old_sha"; fi
+echo "Updating Paperclip: $OLD ($old_label) -> $REL ($new_sha)"
+
+# 2. Stop
+systemctl --user stop paperclip-watchdog.timer
+echo "Watchdog timer stopped."
+if ! "$BIN/paperclip-stop"; then
+  systemctl --user start paperclip-watchdog.timer
+  die "paperclip-stop refused or failed; nothing was changed and the watchdog timer is back on."
+fi
+
+# 3. Everything really down
+for port in 3100 54329; do
+  if ss -ltnH "sport = :$port" | grep -q .; then die "port $port is still in use."; fi
+done
+if [ -e "$INSTANCE/db/postmaster.pid" ]; then
+  die "$INSTANCE/db/postmaster.pid exists: the database didn't shut down cleanly."
+fi
+
+# 4. Backup
+BACKUP="$HOME/backups/paperclip-$(date +%Y%m%d-%H%M)-$old_label"
+if [ -e "$BACKUP" ]; then die "$BACKUP already exists."; fi
+mkdir -p "$BACKUP" && chmod 700 "$BACKUP"
+echo "Backing up to $BACKUP ..."
+cp -a "$INSTANCE/db" "$BACKUP/db"
+cp -a "$INSTANCE/secrets" "$BACKUP/secrets"
+for f in .env config.json; do
+  if [ -e "$INSTANCE/$f" ]; then cp -a "$INSTANCE/$f" "$BACKUP/$f"; fi
+done
+cat > "$BACKUP/backup-info" <<EOF
+date=$(date -Is)
+previous=$OLD
+previous_commit=$old_sha
+next=$REL
+next_commit=$new_sha
+EOF
+src_size="$(du -sb "$INSTANCE/db" | cut -f1)"; dst_size="$(du -sb "$BACKUP/db" | cut -f1)"
+[ "$src_size" = "$dst_size" ] || die "backup size mismatch ($src_size vs $dst_size bytes)."
+echo "Backup done ($(du -sh "$BACKUP" | cut -f1))."
+
+# 5. Migrations
+echo "Applying migrations from $REL ..."
+if ! (cd "$REL" && env PAPERCLIP_HOME="$DATA" PAPERCLIP_INSTANCE_ID=default \
+        PAPERCLIP_CONFIG="$INSTANCE/config.json" PAPERCLIP_CONTEXT="$DATA/context.json" \
+        pnpm db:migrate); then
+  die "migrations failed. Paperclip is stopped and still points at $OLD. Restore with: paperclip-rollback $BACKUP"
+fi
+
+# 6. Switch and start
+ln -sfn "$REL" "$CURRENT.tmp" && mv -Tf "$CURRENT.tmp" "$CURRENT"
+echo "$CURRENT -> $REL"
+if ! "$BIN/paperclip-start"; then
+  die "the new release didn't start. Logs: $DATA/logs/paperclip.log. Undo with: paperclip-rollback $BACKUP"
+fi
+
+# 7. History
+echo "$(date -Is) update $old_label -> $new_sha ($REL) backup=$BACKUP" >> "$HISTORY"
+echo
+echo "Done. The watchdog timer is still stopped. After checking, start it with:"
+echo "  systemctl --user start paperclip-watchdog.timer"
+echo "Undo with: paperclip-rollback $BACKUP"

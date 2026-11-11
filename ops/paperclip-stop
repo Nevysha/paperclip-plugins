@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Stops a Paperclip started by paperclip-start. Refuses while agent runs are live or
+# queued, or when it can't tell.
+#
+#   paperclip-stop           safe stop
+#   paperclip-stop --force   skip that check, and kill whatever is left after the wait
+#
+# pnpm (dev setup) puts its children in nested process groups, so the session is what
+# identifies everything paperclip-start launched, in both setups.
+set -euo pipefail
+
+DATA="$HOME/.paperclip-dev"
+PORT="${PAPERCLIP_PORT:-3100}"
+PIDFILE="$DATA/paperclip.pid"
+API="http://localhost:$PORT/api"
+WAIT_SECONDS=60
+
+force=0
+case "${1:-}" in
+  "") ;;
+  --force) force=1 ;;
+  *) echo "Usage: paperclip-stop [--force]" >&2; exit 64 ;;
+esac
+
+# Only trust the PID file if that process leads its own session and runs from the
+# Paperclip clone or a release folder: after a reboot the number may belong to
+# something else.
+sid=""
+if [ -s "$PIDFILE" ]; then
+  pid="$(cat "$PIDFILE")"
+  cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+  if [ "$(ps -o sid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$pid" ]; then
+    case "$cwd" in
+      "$HOME/paperclip" | "$HOME"/paperclip-releases/*) sid="$pid" ;;
+    esac
+  fi
+fi
+if [ -z "$sid" ]; then
+  rm -f "$PIDFILE"
+  if ss -ltnH "sport = :$PORT" | grep -q .; then
+    echo "Something is on port $PORT, but paperclip-start didn't launch it." >&2
+    echo "If Paperclip was started in a terminal, press Ctrl+C there." >&2
+    exit 4
+  fi
+  echo "Paperclip isn't running."
+  exit 0
+fi
+
+if [ "$force" = 1 ]; then
+  echo "--force: skipping the agent run check."
+else
+  if ! runs="$(API="$API" python3 - 2>/dev/null <<'PY'
+import json, os, urllib.request
+api = os.environ["API"]
+def get(path):
+    with urllib.request.urlopen(api + path, timeout=10) as r:
+        return json.load(r)
+for company in get("/companies"):
+    for run in get(f"/companies/{company['id']}/live-runs"):
+        print(f"  {run.get('status')}: {run.get('agentName') or run.get('agentId')}, "
+              f"run {str(run.get('id'))[:8]}, started {run.get('startedAt') or 'not yet'}")
+PY
+  )"; then
+    echo "Refusing to stop: couldn't ask Paperclip about agent runs at $API." >&2
+    echo "Use --force if you know nothing is running." >&2
+    exit 3
+  fi
+  if [ -n "$runs" ]; then
+    echo "Refusing to stop: agent runs are live or queued." >&2
+    echo "$runs" >&2
+    echo "Wait for them, or use --force. Interrupting a run can leave its task needing manual recovery." >&2
+    exit 2
+  fi
+  echo "No live or queued agent runs."
+fi
+
+alive() { [ -n "$(ps -o pid= -s "$sid")" ]; }
+
+echo -n "Stopping Paperclip (session $sid)"
+kill -TERM -- "-$sid" 2>/dev/null || true
+for ((i = 0; i < WAIT_SECONDS; i += 2)); do
+  if ! alive; then
+    echo
+    rm -f "$PIDFILE"
+    echo "Paperclip stopped."
+    exit 0
+  fi
+  sleep 2
+  echo -n "."
+done
+echo
+
+if [ "$force" = 1 ]; then
+  echo "Still running after ${WAIT_SECONDS}s. --force: killing what's left."
+  pkill -KILL -s "$sid" || true
+  sleep 1
+  rm -f "$PIDFILE"
+  exit 0
+fi
+echo "Still running after ${WAIT_SECONDS}s. Nothing was killed; use --force to do that:" >&2
+ps -o pid,etimes,cmd -s "$sid" | cut -c1-120 >&2
+exit 1
