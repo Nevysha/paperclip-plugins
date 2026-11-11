@@ -28,9 +28,9 @@ A **Watchdog** button in the header showing whether the watchdog (a timer outsid
 
 ## [`fleet-cost`](fleet-cost/README.md)
 
-A **Fleet Cost** page showing what the fleet's Claude usage would cost at API prices, per day, week, month, agent and task, with token usage. There's also a header button with today's cost.
+**Token Lens**: where the fleet's Claude tokens go. One page with three tabs: **Cost** (what the usage would cost at API prices, per day, agent and task), **Tools** (what each kind of tool call costs, and calls per run) and **Efficiency** (tokens per line of merged code, with or without docs). A header button opens it; the sidebar link shows today's cost. A small collector feeds the Tools and Efficiency tabs every 15 minutes.
 
-![The Fleet Cost page in dark mode, split by agent, with cost totals and daily cost and token line charts](fleet-cost/docs/fleet-cost-view.png)
+![The Cost tab of Token Lens in dark mode, split by agent, with cost totals and daily cost and token line charts](fleet-cost/docs/token-lens-cost.png)
 
 ## [`dependency-graph`](dependency-graph/README.md)
 
