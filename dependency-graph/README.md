@@ -2,7 +2,7 @@
 
 A **Dependencies** page that draws which tasks wait on which, as a graph. Paperclip stores these links (a task's "Blocked by" list) but only shows them one task at a time.
 
-![The Dependencies page in dark mode: chains of tasks flowing left to right, coloured by status, with NEV-428's chain lit up and its details in the side panel](docs/dependency-graph.png)
+![The Dependencies page in dark mode: chains of tasks flowing left to right, coloured by status, with Holds up badges and the Needs attention panel listing the tasks holding up the most work](docs/dependency-graph.png)
 
 ## What it shows
 
