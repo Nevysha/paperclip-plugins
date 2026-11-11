@@ -220,7 +220,7 @@ packages:
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
 
   '@paperclipai/plugin-sdk@file:.paperclip-sdk/paperclipai-plugin-sdk-1.0.0.tgz':
-    resolution: {integrity: sha512-KwiHrGgakZdFcHZo5NtPmaLol5dyu6/B0blkJo2JmfL7MLy5lFKIpkaFlGNZEtdcw6KzSNQw34sMH4L9eFTWtQ==, tarball: file:.paperclip-sdk/paperclipai-plugin-sdk-1.0.0.tgz}
+    resolution: {integrity: sha512-ExLZCdyT99Zw5l6kbAKXF3BB4V/Wh9820wOztrPUKDeifiqAtlmNacswQXBGaltBj4hKBIGB1dJ/3yL+EZx2LA==, tarball: file:.paperclip-sdk/paperclipai-plugin-sdk-1.0.0.tgz}
     version: 1.0.0
     engines: {node: '>=24.11.0'}
     hasBin: true
@@ -231,7 +231,7 @@ packages:
         optional: true
 
   '@paperclipai/shared@file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz':
-    resolution: {integrity: sha512-0yYKJ5QwCPX7zdSIUn9ro9e1vNizGNPI+GWdlZc2Im2IYE+UCvYTvMCF2SZsYdjAyfzpF4NTUORQjsU73/PpXw==, tarball: file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz}
+    resolution: {integrity: sha512-MnKEieledmn2vzDqjd1pBF4zDosUBuhaoAisjZ8BsxNXwZAeFYpUU1SPDugFkJe5CdhkvIs2UGfRQ/RVWGJzrw==, tarball: file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz}
     version: 0.3.1
     engines: {node: '>=24.11.0'}
 
