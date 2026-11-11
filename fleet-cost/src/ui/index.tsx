@@ -101,7 +101,7 @@ export function FleetCostToolbarButton({ context }: PluginWidgetProps) {
         padding: "6px 12px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", color: "var(--foreground)",
         display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none", whiteSpace: "nowrap",
       }}>
-      Cost
+      Token Lens
       {today != null ? <strong style={{ fontVariantNumeric: "tabular-nums" }}>{usd(today)}</strong> : null}
     </a>
   );
