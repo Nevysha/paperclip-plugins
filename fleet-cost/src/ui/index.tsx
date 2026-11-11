@@ -90,19 +90,16 @@ export function FleetCostSidebarLink({ context }: PluginSidebarProps) {
   );
 }
 
-export function FleetCostToolbarButton({ context }: PluginWidgetProps) {
+export function FleetCostToolbarButton(_props: PluginWidgetProps) {
   const nav = useHostNavigation();
-  const today = useTodayCost(context.companyId);
   return (
     <a {...nav.linkProps("/fleet-cost")}
-      aria-label={today != null ? `Token Lens, ${usd(today)} at API prices today` : "Token Lens"}
-      title="Token Lens: what today's usage would cost at Claude API prices, and where the tokens go"
+      title="Token Lens: where the fleet's tokens go"
       style={{
         padding: "6px 12px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", color: "var(--foreground)",
         display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none", whiteSpace: "nowrap",
       }}>
       Token Lens
-      {today != null ? <strong style={{ fontVariantNumeric: "tabular-nums" }}>{usd(today)}</strong> : null}
     </a>
   );
 }
