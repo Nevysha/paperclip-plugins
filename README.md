@@ -1,6 +1,6 @@
 # Paperclip plugins
 
-Private plugins for my local Paperclip instance.
+Plugins for my local Paperclip instance.
 
 ## [`decision-log`](decision-log/README.md)
 
@@ -53,3 +53,7 @@ curl -X POST http://localhost:3100/api/plugins/install -H 'content-type: applica
 ```
 
 `.paperclip-sdk/` holds the SDK snapshots each plugin builds against, so a clone builds without a Paperclip checkout.
+
+## License
+
+[MIT](LICENSE)
