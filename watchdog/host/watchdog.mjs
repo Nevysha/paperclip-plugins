@@ -11,9 +11,10 @@
 //   3. Nudges: a `blocked` task whose blockers are all done, or whose last run
 //      failed, goes back to `todo` with a comment, which wakes its owner.
 //   4. Idle todo: a `todo` task with nothing running and no open blockers gets a wakeup.
-//   5. CI: when a GitHub Actions run finishes, comment on the open task named in
-//      the commit message or branch (or whose recent comments name the commit),
-//      which wakes its owner.
+//   5. CI: when a CI run finishes (space-4x on the host's Forgejo, paperclip-plugins on GitHub
+//      Actions), comment on the open task named in the commit message or branch (or whose
+//      recent comments name the commit), which wakes its owner. It also notes when Forgejo's
+//      mirror of space-4x's main on GitHub falls behind.
 // Steps 2-5 start agent runs, so they're skipped while Claude usage is at or
 // over the gate in ~/.paperclip-dev/claude-usage.json. Never sends cards, never
 // closes tasks as done, never starts Paperclip when it's down.
@@ -32,6 +33,14 @@ const API = "http://localhost:3100/api";
 const COMPANY = "f305d1c7-0061-4a97-90b4-73783025f4cc";
 const REPOS = ["Nevysha/space-4x", "Nevysha/paperclip-plugins"];
 const GH_CONFIG_DIR = join(HOME, ".config/space4x/gh");
+// Repos on the host's Forgejo (since 2026-11-13), by the name paperclip-wait and the state use.
+// Read with the paperclip-tools account's read-only token; the others stay on GitHub.
+const FORGE = {
+  url: process.env.FORGE_URL?.trim() || "http://localhost:3300",
+  tokenFile: join(HOME, ".config/space4x/forgejo-tools-token"),
+  repos: { "Nevysha/space-4x": "nevysha/space-4x" },
+  mirrors: { "Nevysha/space-4x": "Nevysha/space-4x" }, // Forgejo repo -> its GitHub mirror of main
+};
 const DIR = process.env.PAPERCLIP_WATCHDOG_DIR?.trim() || join(HOME, ".paperclip-dev/watchdog");
 const FILES = {
   status: join(DIR, "status.json"),
@@ -130,6 +139,61 @@ function gh(args) {
     encoding: "utf8",
     timeout: 30_000,
   });
+}
+
+// GET on Forgejo's API. The token goes to curl on stdin, never on its command line.
+function forge(path) {
+  const token = readFileSync(FORGE.tokenFile, "utf8").trim();
+  try {
+    return JSON.parse(execFileSync("curl", ["-fsS", "-H", "@-", `${FORGE.url}/api/v1${path}`], {
+      input: `Authorization: token ${token}\n`, encoding: "utf8", timeout: 30_000,
+    }));
+  } catch (e) {
+    throw new Error(`Forgejo GET ${path}: ${String(e.stderr || e.message).trim().split("\n")[0]}`);
+  }
+}
+
+// Forgejo's recent CI jobs, in the shape `gh run list` gives, so the rest stays the same.
+// A pull request's job names the pull request ("#12") instead of its branch: look it up.
+function forgeRuns(repo) {
+  const fr = FORGE.repos[repo];
+  const prs = new Map();
+  const pr = (n) => { if (!prs.has(n)) prs.set(n, forge(`/repos/${fr}/pulls/${n}`)); return prs.get(n); };
+  const done = new Set(["success", "failure", "cancelled", "skipped"]);
+  return (forge(`/repos/${fr}/actions/tasks?limit=30`).workflow_runs ?? []).map((t) => {
+    const n = /^#(\d+)$/.exec(t.head_branch ?? "")?.[1];
+    const p = n ? pr(n) : null;
+    return {
+      databaseId: `forgejo-${t.id}`,
+      displayTitle: t.display_title,
+      headBranch: p ? p.head?.ref : t.head_branch,
+      headSha: t.head_sha,
+      status: done.has(t.status) ? "completed" : t.status,
+      conclusion: done.has(t.status) ? t.status : null,
+      updatedAt: t.updated_at,
+      url: t.url,
+      event: t.event,
+      workflowName: (t.workflow_id ?? "CI").replace(/\.ya?ml$/, ""),
+      pr: p,
+    };
+  });
+}
+
+// Forgejo pushes main to GitHub on every merge. If they differ for a while, say so: the
+// mirror's token may have expired, or someone pushed to GitHub. Not a reason to wake anyone.
+function checkMirrors() {
+  for (const [repo, ghRepo] of Object.entries(FORGE.mirrors)) {
+    try {
+      const fsha = forge(`/repos/${FORGE.repos[repo]}/branches/main`).commit?.id;
+      const gsha = gh(["api", `repos/${ghRepo}/branches/main`, "--jq", ".commit.sha"]).trim();
+      state.mirrorDiff ??= {};
+      if (fsha && fsha === gsha) { delete state.mirrorDiff[repo]; continue; }
+      state.mirrorDiff[repo] ??= now;
+      if (now - state.mirrorDiff[repo] > 15 * MIN) {
+        notes.push(`GitHub mirror of ${repo} differs from Forgejo's main for ${Math.round((now - state.mirrorDiff[repo]) / MIN)} min (Forgejo ${fsha?.slice(0, 7)}, GitHub ${gsha.slice(0, 7)}): check the push mirror in Forgejo's repo settings`);
+      }
+    } catch (e) { notes.push(`Couldn't compare ${repo} with its GitHub mirror: ${String(e.message).slice(0, 120)}`); }
+  }
 }
 
 function restartPaperclip() {
@@ -369,9 +433,22 @@ async function checkWaits({ gate, detailed, liveIssueIds, byIdent, runsByRepo })
 
 // A result nobody can act on wakes an agent for nothing: the commit is no longer the head of
 // its branch (a newer push replaced it), the branch is gone, or its pull request is merged or
-// closed. Returns why it's stale, or null. On a GitHub error, deliver rather than drop it.
+// closed. Returns why it's stale, or null. On a GitHub or Forgejo error, deliver rather than drop it.
 function staleReason(repo, run) {
   if (!run.headBranch || run.headBranch === "main") return null;
+  if (FORGE.repos[repo]) {
+    try {
+      if (run.event === "pull_request" && run.pr) {
+        const p = run.pr;
+        if (p.state !== "open") return `its pull request #${p.number} is ${p.merged ? "merged" : "closed"}`;
+        return p.head?.sha === run.headSha ? null : `a newer commit replaced it in pull request #${p.number}`;
+      }
+      const tip = forge(`/repos/${FORGE.repos[repo]}/branches/${encodeURIComponent(run.headBranch)}`).commit?.id;
+      return tip === run.headSha ? null : "a newer commit replaced it on the branch";
+    } catch (e) {
+      return /\b404\b/.test(String(e.message)) ? "the branch is gone" : null;
+    }
+  }
   try {
     if (run.event === "pull_request") {
       const prs = JSON.parse(gh(["api", `repos/${repo}/commits/${run.headSha}/pulls`]));
@@ -393,10 +470,11 @@ async function checkCi({ gate, detailed, liveIssueIds, issues }) {
   const runsByRepo = new Map();
   for (const repo of REPOS) {
     try {
-      runsByRepo.set(repo, JSON.parse(gh(["run", "list", "-R", repo, "-L", "30", "--json",
+      runsByRepo.set(repo, FORGE.repos[repo] ? forgeRuns(repo) : JSON.parse(gh(["run", "list", "-R", repo, "-L", "30", "--json",
         "databaseId,displayTitle,headBranch,headSha,conclusion,status,updatedAt,url,event,workflowName"])));
     } catch (e) { notes.push(`Couldn't read CI for ${repo}: ${String(e.message).slice(0, 120)}`); }
   }
+  checkMirrors();
   await checkWaits({ gate, detailed, liveIssueIds, byIdent, runsByRepo });
   for (const [repo, runs] of runsByRepo) {
     for (const run of runs) {
@@ -409,7 +487,11 @@ async function checkCi({ gate, detailed, liveIssueIds, issues }) {
       const stale = staleReason(repo, run);
       if (stale) { log("debug", `CI ${key} ${run.headBranch}@${run.headSha.slice(0, 7)} skipped: ${stale}`); state.ciSeen[key] = now; delete state.ciPending[key]; continue; }
       let message = run.displayTitle ?? "";
-      try { message = gh(["api", `repos/${repo}/commits/${run.headSha}`, "--jq", ".commit.message"]); } catch { /* keep title */ }
+      try {
+        message = FORGE.repos[repo]
+          ? forge(`/repos/${FORGE.repos[repo]}/git/commits/${run.headSha}`).commit?.message ?? message
+          : gh(["api", `repos/${repo}/commits/${run.headSha}`, "--jq", ".commit.message"]);
+      } catch { /* keep title */ }
       const idents = new Set([...`${message} ${run.headBranch}`.matchAll(/\bNEV-\d+\b/g)].map((m) => m[0]));
       const targets = new Set();
       for (const ident of idents) {

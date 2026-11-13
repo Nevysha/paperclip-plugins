@@ -48,7 +48,7 @@ The plugin was called Fleet Cost; its ID (`nevysha.fleet-cost`) and page URL (`/
 Paperclip doesn't let a plugin read run events (where tool calls are) or call localhost, so `collector/collect.mjs` runs outside it. Every 15 minutes it:
 
 1. reads finished runs' tool and usage events from Postgres and posts per-run summaries to the plugin's `POST /ingest` route;
-2. lists merged PRs with `gh` (the agents' limited token, `GH_CONFIG_DIR=~/.config/space4x/gh`), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
+2. lists merged PRs (space-4x from the host's Forgejo, with the read-only token in `~/.config/space4x/forgejo-tools-token`; repos still on GitHub with `gh` and the agents' limited token, `GH_CONFIG_DIR=~/.config/space4x/gh`; set the list with `TOKEN_LENS_REPOS`, where `forgejo:owner/name` means Forgejo), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
 
 It does nothing when Paperclip isn't answering and never starts it. Its timer doesn't start at boot either: `paperclip-start` (in [`ops/`](../ops/)) starts it, with a first pass 2 minutes later, and `paperclip-stop` stops it. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
 
