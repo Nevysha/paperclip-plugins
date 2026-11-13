@@ -9,7 +9,8 @@
 #   paperclip-wait --cancel <id>
 #
 # Waits live in ~/.paperclip-dev/watchdog/waits.json and show in the Watchdog
-# button in Paperclip's header. A wait is dropped after 24 hours.
+# button in Paperclip's header. A wait is dropped after 24 hours. The watchdog reads
+# Nevysha/space-4x's CI from the host's Forgejo, and paperclip-plugins' from GitHub.
 set -euo pipefail
 
 NODE="$(command -v node || true)"

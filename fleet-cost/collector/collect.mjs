@@ -10,8 +10,9 @@
 //   node collector/collect.mjs [--dry-run] [--full]
 //
 // Env: TOKEN_LENS_DB (Postgres URL), TOKEN_LENS_API (Paperclip URL), TOKEN_LENS_REPOS
-// (comma-separated owner/name), GH_CONFIG_DIR (gh login used for the repos: the
-// agents' limited token, never the founder's).
+// (comma-separated: `forgejo:owner/name` for a repo on the host's Forgejo, read with the
+// read-only token in TOKEN_LENS_FORGE_TOKEN_FILE; plain `owner/name` for GitHub, read with
+// GH_CONFIG_DIR, the agents' limited token, never the founder's login).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -21,7 +22,18 @@ import { attributeRun, commitHashesIn, commitSubjects, matchCommits, summarizeNu
 
 const DB_URL = process.env.TOKEN_LENS_DB ?? "postgres://paperclip:paperclip@127.0.0.1:54329/paperclip";
 const API = process.env.TOKEN_LENS_API ?? "http://localhost:3100";
-const REPOS = (process.env.TOKEN_LENS_REPOS ?? "Nevysha/space-4x").split(",").map((s) => s.trim()).filter(Boolean);
+// space-4x moved to the host's Forgejo on 2026-11-13. Its pull request numbers start again at 1,
+// so its rows and state keys carry the "forgejo:" prefix and never mix with GitHub's.
+const REPOS = (process.env.TOKEN_LENS_REPOS ?? "forgejo:nevysha/space-4x").split(",").map((s) => s.trim()).filter(Boolean);
+const FORGE_URL = process.env.FORGE_URL ?? "http://localhost:3300";
+const FORGE_TOKEN_FILE = process.env.TOKEN_LENS_FORGE_TOKEN_FILE ?? path.join(os.homedir(), ".config/space4x/forgejo-tools-token");
+const forgeName = (repo) => (repo.startsWith("forgejo:") ? repo.slice("forgejo:".length) : null);
+const forgeToken = () => fs.readFileSync(FORGE_TOKEN_FILE, "utf8").trim();
+// GET on Forgejo's API; the token goes to curl on stdin, never on its command line.
+function forge(apiPath) {
+  return JSON.parse(execFileSync("curl", ["-fsS", "-H", "@-", `${FORGE_URL}/api/v1${apiPath}`],
+    { input: `Authorization: token ${forgeToken()}\n`, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
+}
 const PLUGIN = "nevysha.fleet-cost";
 const STATE_DIR = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state"), "token-lens");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
@@ -117,14 +129,51 @@ const ghEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
 const credential = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"];
 
 function syncMirror(repo) {
-  const dir = path.join(MIRROR_DIR, `${repo.replace("/", "__")}.git`);
+  const dir = path.join(MIRROR_DIR, `${repo.replace(":", "_").replace("/", "__")}.git`);
+  const fr = forgeName(repo);
+  // Forgejo: the token reaches git through its environment (GIT_CONFIG_*), not its arguments.
+  const env = fr
+    ? { ...ghEnv, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.extraHeader", GIT_CONFIG_VALUE_0: `Authorization: token ${forgeToken()}` }
+    : ghEnv;
+  const cred = fr ? [] : credential;
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(MIRROR_DIR, { recursive: true });
-    git([...credential, "clone", "--bare", "--quiet", `https://github.com/${repo}.git`, dir], { env: ghEnv });
+    git([...cred, "clone", "--bare", "--quiet", fr ? `${FORGE_URL}/${fr}.git` : `https://github.com/${repo}.git`, dir], { env });
   }
-  // PR heads keep each PR's own commits after a squash merge.
-  git([...credential, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/pull/*/head:refs/pull/*/head"], { env: ghEnv });
+  // PR heads keep each PR's own commits after a squash merge (Forgejo has refs/pull/*/head too).
+  git([...cred, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/pull/*/head:refs/pull/*/head"], { env });
   return dir;
+}
+
+// Merged pull requests, as `gh pr list --json number,title,mergedAt` gives them.
+function mergedPrs(repo) {
+  const fr = forgeName(repo);
+  if (!fr) {
+    return JSON.parse(execFileSync("gh", ["pr", "list", "-R", repo, "--state", "merged", "--limit", "1000",
+      "--json", "number,title,mergedAt"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
+  }
+  const out = [];
+  for (let page = 1; page <= 40; page++) { // Forgejo lists at most 50 per page
+    const got = forge(`/repos/${fr}/pulls?state=closed&limit=50&page=${page}`);
+    out.push(...got.filter((p) => p.merged).map((p) => ({ number: p.number, title: p.title, mergedAt: p.merged_at })));
+    if (got.length < 50) break;
+  }
+  return out;
+}
+
+// A pull request's own commits: [{ sha, commit: { message } }].
+function prCommits(repo, number) {
+  const fr = forgeName(repo);
+  const commits = [];
+  for (let page = 1; page <= (fr ? 10 : 3); page++) { // GitHub lists at most 250 commits per PR
+    const got = fr
+      ? forge(`/repos/${fr}/pulls/${number}/commits?limit=50&page=${page}&stat=false&files=false&verification=false`)
+      : JSON.parse(execFileSync("gh", ["api", `repos/${repo}/pulls/${number}/commits?per_page=100&page=${page}`],
+        { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
+    commits.push(...got);
+    if (got.length < (fr ? 50 : 100)) break;
+  }
+  return commits;
 }
 
 function numstats(dir, shas) {
@@ -165,21 +214,14 @@ async function collectCommits(sql, companyId, state) {
   let total = 0;
   let evidence = null;
   for (const repo of REPOS) {
-    const prs = JSON.parse(execFileSync("gh", ["pr", "list", "-R", repo, "--state", "merged", "--limit", "1000",
-      "--json", "number,title,mergedAt"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
+    const prs = mergedPrs(repo);
     const todo = [];
     const prsDone = [];
     for (const pr of prs) {
       const prKey = `${repo}#${pr.number}`;
       if (state.prs[prKey]) continue;
       // One call per new PR: the list query can't include commits at this size.
-      const commits = [];
-      for (let page = 1; page <= 3; page++) { // GitHub lists at most 250 commits per PR
-        const got = JSON.parse(execFileSync("gh", ["api", `repos/${repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`],
-          { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
-        commits.push(...got);
-        if (got.length < 100) break;
-      }
+      const commits = prCommits(repo, pr.number);
       for (const c of commits) todo.push({ repo, sha: c.sha, subject: String(c.commit?.message ?? "").split("\n")[0], pr });
       prsDone.push(prKey);
     }

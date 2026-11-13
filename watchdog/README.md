@@ -8,7 +8,8 @@ The watchdog itself isn't part of the plugin. It's a systemd user timer that run
 - moves stalled `blocked` tasks back to `todo`;
 - wakes idle `todo` tasks;
 - adds the **Sliced** label to open tasks whose description starts with `Sized: one run`, since agents can't set labels themselves;
-- comments CI results on the tasks waiting for them. It skips results nobody can act on: a commit a newer push replaced, a deleted branch, or a pull request that's already merged or closed. Waits registered with `paperclip-wait` are always delivered.
+- comments CI results on the tasks waiting for them. It skips results nobody can act on: a commit a newer push replaced, a deleted branch, or a pull request that's already merged or closed. Waits registered with `paperclip-wait` are always delivered. space-4x's CI is read from the host's Forgejo, with the read-only token in `~/.config/space4x/forgejo-tools-token` (account `paperclip-tools`); other repos' from GitHub Actions with `gh`;
+- notes when Forgejo's mirror of space-4x's `main` on GitHub has differed from Forgejo for over 15 minutes.
 
 The steps that start agent runs pause while Claude usage is at or over the limits in `~/.paperclip-dev/claude-usage.json`: `gate.pauseAtPercent` for the 5-hour session and `gate.weekPauseAtPercent` for the week. When the session limit resets, the watchdog forgets its per-task cooldowns once, so tasks that stalled on the limit are picked up on the next run instead of hours later.
 
