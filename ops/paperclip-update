@@ -5,14 +5,14 @@
 #
 # Steps, stopping at the first error:
 #   1. check the release is built (server, UI, staged runner);
-#   2. stop the watchdog timer, then paperclip-stop (safe: refuses while agent runs
-#      are live or queued; then the timer is started again and nothing changes);
+#   2. paperclip-stop, which also stops the watchdog and Token Lens timers (safe: refuses while agent
+#      runs are live or queued, and then nothing changes);
 #   3. check that ports 3100 and 54329 are free and the database is shut down;
 #   4. back up db/, .env, config.json and secrets/ to ~/backups/paperclip-<date>-<old>/;
 #   5. apply the release's migrations (pnpm db:migrate);
-#   6. point ~/paperclip-current at the release, then paperclip-start;
+#   6. point ~/paperclip-current at the release, then paperclip-start, which also
+#      starts those timers;
 #   7. add a line to ~/.paperclip-dev/version-history.log.
-# The watchdog timer stays stopped afterwards, for a manual check first.
 # Undo with: paperclip-rollback ~/backups/paperclip-<date>-<old>
 set -euo pipefail
 
@@ -41,11 +41,8 @@ if [ "$OLD" = "$DEV_REPO" ]; then old_label="dev-$old_sha"; else old_label="$old
 echo "Updating Paperclip: $OLD ($old_label) -> $REL ($new_sha)"
 
 # 2. Stop
-systemctl --user stop paperclip-watchdog.timer
-echo "Watchdog timer stopped."
 if ! "$BIN/paperclip-stop"; then
-  systemctl --user start paperclip-watchdog.timer
-  die "paperclip-stop refused or failed; nothing was changed and the watchdog timer is back on."
+  die "paperclip-stop refused or failed; nothing was changed."
 fi
 
 # 3. Everything really down
@@ -95,6 +92,5 @@ fi
 # 7. History
 echo "$(date -Is) update $old_label -> $new_sha ($REL) backup=$BACKUP" >> "$HISTORY"
 echo
-echo "Done. The watchdog timer is still stopped. After checking, start it with:"
-echo "  systemctl --user start paperclip-watchdog.timer"
+echo "Done."
 echo "Undo with: paperclip-rollback $BACKUP"
