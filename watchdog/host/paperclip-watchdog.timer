@@ -1,10 +1,8 @@
 [Unit]
 Description=Run the Paperclip watchdog every 3 minutes
+# Not enabled at boot: paperclip-start starts this timer and paperclip-stop stops it.
 
 [Timer]
-OnBootSec=3min
+OnActiveSec=3min
 OnUnitInactiveSec=3min
 AccuracySec=30s
-
-[Install]
-WantedBy=timers.target

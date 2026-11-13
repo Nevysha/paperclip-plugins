@@ -50,12 +50,12 @@ Paperclip doesn't let a plugin read run events (where tool calls are) or call lo
 1. reads finished runs' tool and usage events from Postgres and posts per-run summaries to the plugin's `POST /ingest` route;
 2. lists merged PRs with `gh` (the agents' limited token, `GH_CONFIG_DIR=~/.config/space4x/gh`), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
 
-It does nothing when Paperclip isn't answering and never starts it. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
+It does nothing when Paperclip isn't answering and never starts it. Its timer doesn't start at boot either: `paperclip-start` (in [`ops/`](../ops/)) starts it, with a first pass 2 minutes later, and `paperclip-stop` stops it. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
 
 ```sh
 GH_CONFIG_DIR=~/.config/space4x/gh node collector/collect.mjs          # one pass
 systemctl --user link $PWD/collector/systemd/token-lens-collect.{service,timer}
-systemctl --user enable --now token-lens-collect.timer                  # every 15 minutes
+systemctl --user start token-lens-collect.timer                         # every 15 minutes, until stopped
 journalctl --user -u token-lens-collect -n 20                           # its log
 ```
 

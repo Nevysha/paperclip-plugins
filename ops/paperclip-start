@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Starts Paperclip detached from the terminal that ran this, so closing that
-# terminal (or ending a Claude Code session) leaves it running. Stop it with
-# paperclip-stop.
+# terminal (or ending a Claude Code session) leaves it running, then starts the
+# timers that work on it: the watchdog (first tick 3 minutes later) and the Token Lens
+# collector (first pass 2 minutes later). paperclip-stop stops all of it. None of it
+# starts at boot.
 #
 # ~/paperclip-current picks what runs:
 #   - a release folder (~/paperclip-releases/<sha>, built with `pnpm build` and
@@ -25,8 +27,21 @@ LOG="$DATA/logs/paperclip.log"
 HEALTH="http://localhost:$PORT/api/health"
 WAIT_SECONDS=300
 
+TIMERS=(paperclip-watchdog.timer token-lens-collect.timer)
+timers_on() {
+  local t
+  for t in "${TIMERS[@]}"; do
+    if systemctl --user start "$t" 2>/dev/null; then
+      echo "Started $t."
+    else
+      echo "Couldn't start $t (systemctl --user start $t)." >&2
+    fi
+  done
+}
+
 if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then
   echo "Paperclip is already running: http://localhost:$PORT"
+  timers_on
   exit 0
 fi
 if ss -ltnH "sport = :$PORT" | grep -q .; then
@@ -113,6 +128,7 @@ for ((i = 0; i < WAIT_SECONDS; i += 2)); do
     echo
     echo "Paperclip is running: http://localhost:$PORT"
     echo "PID $(cat "$PIDFILE"), log $LOG"
+    timers_on
     exit 0
   fi
   if [ -s "$PIDFILE" ] && ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then

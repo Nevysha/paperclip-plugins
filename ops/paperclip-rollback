@@ -4,7 +4,7 @@
 #   paperclip-rollback ~/backups/paperclip-<date>-<old> [--force] [--plugins <dir>]
 #
 # Steps, stopping at the first error:
-#   1. stop the watchdog timer, then paperclip-stop (--force is passed on to it);
+#   1. paperclip-stop, which also stops the watchdog and Token Lens timers (--force is passed on to it);
 #   2. move the current db/ aside to db.rolled-back-<date> (never deleted here),
 #      and copy the backup's db/ back (migrations can't be undone, so the database
 #      has to come from the backup);
@@ -12,9 +12,9 @@
 #      back from that folder (~/backups/paperclip-plugins-2026-11-11-pre-update
 #      holds the builds from before the 2026-11-11 SDK update);
 #   4. point ~/paperclip-current back at the previous release (or ~/paperclip for
-#      the old pnpm dev:once setup), then paperclip-start.
+#      the old pnpm dev:once setup), then paperclip-start, which also starts those
+#      timers.
 # Anything written to Paperclip after the backup is lost.
-# The watchdog timer stays stopped afterwards.
 set -euo pipefail
 
 DATA="$HOME/.paperclip-dev"
@@ -46,8 +46,7 @@ PREV="$(sed -n 's/^previous=//p' "$BACKUP/backup-info")"
 echo "Rolling back to $PREV with the database from $BACKUP"
 
 # 1. Stop
-systemctl --user stop paperclip-watchdog.timer
-"$BIN/paperclip-stop" "${force[@]}" || die "paperclip-stop refused or failed; nothing was changed. The watchdog timer is stopped."
+"$BIN/paperclip-stop" "${force[@]}" || die "paperclip-stop refused or failed; nothing was changed."
 for port in 3100 54329; do
   if ss -ltnH "sport = :$port" | grep -q .; then die "port $port is still in use."; fi
 done
@@ -80,5 +79,4 @@ echo "$CURRENT -> $PREV"
 
 echo "$(date -Is) rollback -> $PREV backup=$BACKUP${plugin_backup:+ plugins=$plugin_backup}" >> "$HISTORY"
 echo
-echo "Rolled back. The watchdog timer is still stopped. After checking, start it with:"
-echo "  systemctl --user start paperclip-watchdog.timer"
+echo "Rolled back."

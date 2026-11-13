@@ -1,10 +1,8 @@
 [Unit]
 Description=Run the Token Lens collector every 15 minutes
+# Not enabled at boot: paperclip-start starts this timer and paperclip-stop stops it.
 
 [Timer]
-OnBootSec=10min
+OnActiveSec=2min
 OnUnitActiveSec=15min
 Persistent=false
-
-[Install]
-WantedBy=timers.target

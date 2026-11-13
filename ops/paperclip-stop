@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Stops a Paperclip started by paperclip-start. Refuses while agent runs are live or
-# queued, or when it can't tell.
+# queued, or when it can't tell. Also stops the timers paperclip-start starts (the
+# watchdog and the Token Lens collector): they're off before the run check, so the
+# watchdog can't wake a task in between, and back on if the stop is refused.
 #
 #   paperclip-stop           safe stop
 #   paperclip-stop --force   skip that check, and kill whatever is left after the wait
@@ -14,6 +16,7 @@ PORT="${PAPERCLIP_PORT:-3100}"
 PIDFILE="$DATA/paperclip.pid"
 API="http://localhost:$PORT/api"
 WAIT_SECONDS=60
+TIMERS=(paperclip-watchdog.timer token-lens-collect.timer)
 
 force=0
 case "${1:-}" in
@@ -21,6 +24,21 @@ case "${1:-}" in
   --force) force=1 ;;
   *) echo "Usage: paperclip-stop [--force]" >&2; exit 64 ;;
 esac
+
+timers_were_on=()
+timers_off() {
+  local t
+  for t in "${TIMERS[@]}"; do
+    if systemctl --user -q is-active "$t" 2>/dev/null; then
+      timers_were_on+=("$t")
+      systemctl --user stop "$t" && echo "Stopped $t."
+    fi
+  done
+}
+timers_back() {
+  [ "${#timers_were_on[@]}" -gt 0 ] || return 0
+  systemctl --user start "${timers_were_on[@]}" && echo "Back on: ${timers_were_on[*]}." >&2
+}
 
 # Only trust the PID file if that process leads its own session and runs from the
 # Paperclip clone or a release folder: after a reboot the number may belong to
@@ -42,10 +60,12 @@ if [ -z "$sid" ]; then
     echo "If Paperclip was started in a terminal, press Ctrl+C there." >&2
     exit 4
   fi
+  timers_off
   echo "Paperclip isn't running."
   exit 0
 fi
 
+timers_off
 if [ "$force" = 1 ]; then
   echo "--force: skipping the agent run check."
 else
@@ -63,12 +83,14 @@ PY
   )"; then
     echo "Refusing to stop: couldn't ask Paperclip about agent runs at $API." >&2
     echo "Use --force if you know nothing is running." >&2
+    timers_back
     exit 3
   fi
   if [ -n "$runs" ]; then
     echo "Refusing to stop: agent runs are live or queued." >&2
     echo "$runs" >&2
     echo "Wait for them, or use --force. Interrupting a run can leave its task needing manual recovery." >&2
+    timers_back
     exit 2
   fi
   echo "No live or queued agent runs."
