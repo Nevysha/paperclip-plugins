@@ -5,7 +5,7 @@ import {
   addDays, costOf, daysBetween, daysInMonth, groupBy, monthKey, monthsBetween, rateFor, tokensOf, total,
   weekKey, weeksBetween, type CacheTtl, type Totals, type UsageRow,
 } from "../pricing.js";
-import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, monthLabel, pct, tok, usd, useChartKind, type Bucket, type Series } from "./common.js";
+import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, monthLabel, pct, tok, usd, useChartKind, useFilter, type Bucket, type Series } from "./common.js";
 
 // The original Fleet Cost view: cost at API prices over time, by agent, day and task.
 
@@ -13,7 +13,8 @@ import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, monthLabel, pct, to
 
 export type Grain = "day" | "week" | "month";
 type Split = "kind" | "agent";
-export type Period = "7d" | "30d" | "week" | "month" | "all";
+export const PERIODS = ["7d", "30d", "week", "month", "all"] as const;
+export type Period = (typeof PERIODS)[number];
 
 export const KIND_SERIES: Series[] = [
   { id: "cacheRead", label: "Cache reads", color: "var(--fc-s1)" },
@@ -37,10 +38,10 @@ export type Usage = { rows: UsageRow[]; timeZone: string; generatedAt: string };
 
 export function CostView({ data, ttl }: { data: Usage; ttl: CacheTtl }) {
   const nav = useHostNavigation();
-  const [grain, setGrain] = useState<Grain>("day");
-  const [split, setSplit] = useState<Split>("kind");
-  const [period, setPeriod] = useState<Period>("all");
-  const [readsMode, setReadsMode] = useState<"with" | "without">("with");
+  const [grain, setGrain] = useFilter<Grain>("cost", "grain", ["day", "week", "month"], "day");
+  const [split, setSplit] = useFilter<Split>("cost", "split", ["kind", "agent"], "kind");
+  const [period, setPeriod] = useFilter<Period>("cost", "period", PERIODS, "all");
+  const [readsMode, setReadsMode] = useFilter("cost", "reads", ["with", "without"], "with");
   const [costKind, setCostKind] = useChartKind("cost", "bars");
   const [tokenKind, setTokenKind] = useChartKind("tokens", "lines");
   const today = localToday();

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   useHostLocation,
   useHostNavigation,
@@ -7,7 +7,7 @@ import {
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { total } from "../pricing.js";
-import { CSS, Seg, localToday, usd, useApi, useTtl } from "./common.js";
+import { CSS, Seg, localToday, usd, useApi, useStored, useTtl } from "./common.js";
 import { CostView, type Usage } from "./cost.js";
 import { ToolsView, type ToolsData } from "./tools.js";
 import { EfficiencyView, type EfficiencyData } from "./efficiency.js";
@@ -15,12 +15,7 @@ import { EfficiencyView, type EfficiencyData } from "./efficiency.js";
 type Tab = "cost" | "tools" | "efficiency";
 const TAB_KEY = "nevysha.fleet-cost.tab";
 
-function useTab(): [Tab, (t: Tab) => void] {
-  const [tab, setTab] = useState<Tab>(() => {
-    try { const v = localStorage.getItem(TAB_KEY); return v === "tools" || v === "efficiency" ? v : "cost"; } catch { return "cost"; }
-  });
-  return [tab, (t) => { setTab(t); try { localStorage.setItem(TAB_KEY, t); } catch { /* per-viewer convenience only */ } }];
-}
+const useTab = () => useStored<Tab>(TAB_KEY, ["cost", "tools", "efficiency"], "cost");
 
 const INTRO: Record<Tab, string> = {
   cost: "What the fleet's Claude usage would cost at API prices. You pay a flat subscription, so this is an estimate of the value used, not a bill.",

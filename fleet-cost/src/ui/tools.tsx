@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useHostNavigation } from "@paperclipai/plugin-sdk/ui";
 import { daysBetween, emptyTotals, weekKey, weeksBetween, type CacheTtl, type Totals } from "../pricing.js";
 import { addTotals, familyOf, groupTools, median, startShare, type RunStat, type ToolGroup, type ToolRow } from "../lens.js";
-import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, pct, tok, usd, useChartKind, type Bucket, type Series } from "./common.js";
-import { inPeriod, type Period } from "./cost.js";
+import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, pct, tok, usd, useChartKind, useFilter, type Bucket, type Series } from "./common.js";
+import { PERIODS, inPeriod, type Period } from "./cost.js";
 
 export type ToolsData = { tools: ToolRow[]; runs: RunStat[]; timeZone: string; generatedAt: string };
 
@@ -21,9 +21,9 @@ function percentile(values: number[], p: number): number {
 
 export function ToolsView({ data, ttl }: { data: ToolsData; ttl: CacheTtl }) {
   const nav = useHostNavigation();
-  const [period, setPeriod] = useState<Period>("7d");
-  const [by, setBy] = useState<"category" | "family">("category");
-  const [grain, setGrain] = useState<"day" | "week">("day");
+  const [period, setPeriod] = useFilter<Period>("tools", "period", PERIODS, "7d");
+  const [by, setBy] = useFilter("tools", "by", ["category", "family"], "category");
+  const [grain, setGrain] = useFilter("tools", "grain", ["day", "week"], "day");
   const [callsKind, setCallsKind] = useChartKind("calls", "lines");
   const today = localToday();
 

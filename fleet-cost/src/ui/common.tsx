@@ -38,21 +38,26 @@ export function useApi<T>(route: string, companyId: string | null, refreshKey: u
   return { data, error };
 }
 
-export type ChartKind = "bars" | "lines";
-export function useChartKind(key: string, fallback: ChartKind): [ChartKind, (k: ChartKind) => void] {
-  const storageKey = `nevysha.fleet-cost.chart.${key}`;
-  const [kind, setKind] = useState<ChartKind>(() => {
-    try { const v = localStorage.getItem(storageKey); return v === "bars" || v === "lines" ? v : fallback; } catch { return fallback; }
+/**
+ * A choice kept in this browser across reloads (per-viewer convenience only). A stored
+ * value that's no longer one of `allowed` falls back, so renaming an option is safe.
+ */
+export function useStored<T extends string>(storageKey: string, allowed: readonly T[], fallback: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    try { const v = localStorage.getItem(storageKey); return allowed.includes(v as T) ? (v as T) : fallback; } catch { return fallback; }
   });
-  return [kind, (k) => { setKind(k); try { localStorage.setItem(storageKey, k); } catch { /* per-viewer convenience only */ } }];
+  return [value, (v) => { setValue(v); try { localStorage.setItem(storageKey, v); } catch { /* storage blocked: keep it for this visit */ } }];
 }
 
-export function useTtl(): [CacheTtl, (t: CacheTtl) => void] {
-  const [ttl, setTtl] = useState<CacheTtl>(() => {
-    try { return localStorage.getItem(TTL_KEY) === "5m" ? "5m" : "1h"; } catch { return "1h"; }
-  });
-  return [ttl, (t) => { setTtl(t); try { localStorage.setItem(TTL_KEY, t); } catch { /* per-viewer convenience only */ } }];
-}
+/** A filter of one tab, kept across reloads. */
+export const useFilter = <T extends string>(tab: string, name: string, allowed: readonly T[], fallback: T) =>
+  useStored(`nevysha.fleet-cost.${tab}.${name}`, allowed, fallback);
+
+export type ChartKind = "bars" | "lines";
+export const useChartKind = (key: string, fallback: ChartKind) =>
+  useStored<ChartKind>(`nevysha.fleet-cost.chart.${key}`, ["bars", "lines"], fallback);
+
+export const useTtl = () => useStored<CacheTtl>(TTL_KEY, ["1h", "5m"], "1h");
 
 // ---------------------------------------------------------------- formatting
 
