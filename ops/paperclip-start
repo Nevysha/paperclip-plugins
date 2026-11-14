@@ -96,7 +96,9 @@ else
          PAPERCLIP_CONFIG="$DATA/instances/default/config.json"
          PAPERCLIP_CONTEXT="$DATA/context.json"
          PAPERCLIP_MIGRATION_PROMPT=never
-         PAPERCLIP_MIGRATION_AUTO_APPLY=false)
+         PAPERCLIP_MIGRATION_AUTO_APPLY=false
+         # Tailscale serve (https://paperclip.tailb0dfdd.ts.net) proxies to localhost:3100
+         PAPERCLIP_ALLOWED_HOSTNAMES=paperclip.tailb0dfdd.ts.net)
   cd "$REL"
   # Since 2026-11 the server exits with code 1 when it loses its instance lease
   # (for example, the database stalled for over 60 s) and expects a supervisor to
