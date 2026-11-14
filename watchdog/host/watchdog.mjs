@@ -17,6 +17,10 @@
 //      mirror of space-4x's main on GitHub falls behind.
 //   6. Sliced label; 7. Wake loops: an agent restarting on the same issue again and again
 //      with nothing to do (see wake-loops.mjs) is reported in the header, never acted on.
+//   0. Claude login: renews the paperclip user's Claude login (~/.claude/.credentials.json) when it's
+//      about to expire, by running `claude auth status`. The claude-usage plugin reads that login
+//      but never renews it, and without fresh usage data the usage gate below stops gating.
+//      Agents don't use it (each run gets its own CLAUDE_CODE_OAUTH_TOKEN).
 // Steps 2-5 start agent runs, so they're skipped while Claude usage is at or
 // over the gate in ~/.paperclip-dev/claude-usage.json. Never sends cards, never
 // closes tasks as done, never starts Paperclip when it's down.
@@ -51,7 +55,9 @@ const FILES = {
   log: join(DIR, "watchdog.log"),
   paused: join(DIR, "paused"),
   usage: join(HOME, ".paperclip-dev/claude-usage.json"),
+  claudeCredentials: join(HOME, ".claude/.credentials.json"),
 };
+const CLAUDE_BIN = join(HOME, ".local/bin/claude");
 const DRY = process.argv.includes("--dry-run");
 const LIVE = new Set(["queued", "scheduled_retry", "running"]);
 const CLOSED = new Set(["done", "cancelled"]);
@@ -120,6 +126,30 @@ function usageGate() {
   return hot
     ? { open: false, why: `usage ${u.sessionPercent}% session (limit ${limit}%) / ${u.weekPercent}% week (limit ${weekLimit}%)` }
     : { open: true, why: `usage ${u.sessionPercent}% session / ${u.weekPercent}% week` };
+}
+
+// The access token lasts about 8 h. `claude auth status` swaps it for a new one with the stored
+// refresh token when it's near expiry or expired: no model call, no cost. Its output names the
+// account, so it isn't logged. Ticks are 3.5 min apart, so a 15 min margin gives a few tries.
+function renewClaudeLogin() {
+  const expiresAt = () => readJson(FILES.claudeCredentials, null)?.claudeAiOauth?.expiresAt;
+  const before = expiresAt();
+  if (typeof before !== "number") { notes.push("Claude login file has no expiry; can't renew it (usage data may go stale)"); return; }
+  if (before - now > 15 * MIN) return;
+  const was = before <= now ? `expired ${Math.round((now - before) / MIN)} min ago` : `expiring in ${Math.round((before - now) / MIN)} min`;
+  if (DRY) { log("info", `(would) renew the Claude login (${was})`); return; }
+  try {
+    execFileSync(CLAUDE_BIN, ["auth", "status"], { stdio: "ignore", timeout: 60_000 });
+  } catch (e) {
+    log("warn", `claude auth status failed: ${String(e.message).slice(0, 200)}`);
+  }
+  const after = expiresAt();
+  if (typeof after === "number" && after - Date.now() > 15 * MIN) {
+    log("info", `renewed the Claude login (${was}); valid until ${new Date(after).toISOString()}`);
+  } else {
+    notes.push(`Claude login ${was} and renewing it failed; usage data will go stale. Run: pcx "claude auth status"`);
+    log("warn", `Claude login ${was}; renewal didn't extend it`);
+  }
 }
 
 function writeStatus(extra) {
@@ -221,6 +251,9 @@ async function main() {
     writeStatus({ healthy: null, summary: "Paused" });
     return;
   }
+
+  // 0. Claude login, so the usage data (and the usage gate) stay fresh.
+  renewClaudeLogin();
 
   let health;
   try { health = await api("GET", "/health"); } catch (e) {
