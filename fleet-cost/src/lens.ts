@@ -75,12 +75,17 @@ export type IssueUsage = Priced & {
 export type CommitRow = {
   sha: string; prNumber: number; prTitle: string; mergedDay: string | null; matchMethod: string;
   codeAdded: number; codeDeleted: number; docAdded: number; docDeleted: number; codeFiles: number; docFiles: number;
-  issueId: string | null; agentId: string | null; agentName: string | null;
+  issueId: string | null;
+  /** The run that made the commit; null when none was matched. */
+  runId: string | null; agentId: string | null; agentName: string | null;
 };
+/** The usage of one run that made merged commits. */
+export type RunUsage = Priced & { runId: string; issueId: string | null };
 
 /**
- * all: every line; code: lines outside .md; docs: .md lines. A task that changed both is
- * split by its line counts, tokens and cost included, so "code" plus "docs" is "all".
+ * all: every line; code: lines outside .md; docs: .md lines. A task that changed both has
+ * its tokens and cost split between "code" and "docs" (see splitTask), so the two add up
+ * to "all" in lines, tokens and cost.
  */
 export type DocMode = "all" | "code" | "docs";
 
@@ -90,10 +95,12 @@ export type TaskEfficiency = {
   author: string | null;
   t: Totals; commits: number; prs: number[]; mergedDay: string; matched: number;
   codeLines: number; docLines: number; codeAdded: number; docAdded: number;
+  /** The task's usage that goes with its code lines, and with its doc lines. */
+  codeT: Totals; docT: Totals;
 };
 
 /** Tasks with merged commits, with all their usage. Commits with no task are counted apart. */
-export function buildTasks(usage: IssueUsage[], commits: CommitRow[], ttl: CacheTtl) {
+export function buildTasks(usage: IssueUsage[], commits: CommitRow[], ttl: CacheTtl, runs: RunUsage[] = []) {
   const byIssue = new Map<string, TaskEfficiency>();
   const authorLines = new Map<string, Map<string, number>>();
   let unlinkedCommits = 0;
@@ -101,7 +108,7 @@ export function buildTasks(usage: IssueUsage[], commits: CommitRow[], ttl: Cache
     if (!c.issueId) { unlinkedCommits++; continue; }
     const t = byIssue.get(c.issueId) ?? {
       issueId: c.issueId, identifier: null, title: null, agents: "", author: null, t: emptyTotals(), commits: 0, prs: [], mergedDay: "",
-      matched: 0, codeLines: 0, docLines: 0, codeAdded: 0, docAdded: 0,
+      matched: 0, codeLines: 0, docLines: 0, codeAdded: 0, docAdded: 0, codeT: emptyTotals(), docT: emptyTotals(),
     };
     t.commits++;
     if (c.matchMethod !== "none") t.matched++;
@@ -129,6 +136,7 @@ export function buildTasks(usage: IssueUsage[], commits: CommitRow[], ttl: Cache
     t.agents = [...new Set([...t.agents.split(", "), ...u.agents.split(", ")].filter(Boolean))].join(", ");
     t.t = addTotals(t.t, u, ttl);
   }
+  for (const t of byIssue.values()) splitTask(t, commits, runs, ttl);
   return { tasks: [...byIssue.values()], otherTasks, otherCount, unlinkedCommits };
 }
 
@@ -140,20 +148,54 @@ export function inMode(t: TaskEfficiency, mode: DocMode): boolean {
   return linesOf(t, mode) > 0;
 }
 
-/** The part of a task's usage that goes with the lines counted: its share of the task's lines. */
-export function shareOf(t: TaskEfficiency, mode: DocMode): number {
-  const all = t.codeLines + t.docLines;
-  return all > 0 ? linesOf(t, mode) / all : 0;
-}
-
 function scale<T extends Record<string, number>>(x: T, f: number): T {
   return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v * f])) as T;
 }
+function combine<T extends Record<string, number>>(a: T, b: T, fb: number): T {
+  return Object.fromEntries(Object.entries(a).map(([k, v]) => [k, v + fb * (b[k] ?? 0)])) as T;
+}
+/** a + f·b, field by field; runs stay a's. */
+function plus(a: Totals, b: Totals, f = 1): Totals {
+  return { cost: combine(a.cost, b.cost, f), tokens: combine(a.tokens, b.tokens, f), runs: a.runs };
+}
 
-/** A task's tokens and cost for the lines counted. Runs aren't split: a run that changed both counts in both. */
+/**
+ * Splits a task's usage between its code and doc lines, run by run. A run that made merged
+ * commits gives its own tokens to the code and doc lines of those commits. The rest of the
+ * task's usage (runs that committed nothing: reviews, plans, retries; and runs whose commits
+ * changed no counted line) is split by the task's line counts. With no run matched, that's
+ * the whole task, as before.
+ */
+export function splitTask(t: TaskEfficiency, commits: CommitRow[], runs: RunUsage[], ttl: CacheTtl): void {
+  const lines = new Map<string, { code: number; docs: number }>();
+  for (const c of commits) {
+    if (c.issueId !== t.issueId || !c.runId) continue;
+    const l = lines.get(c.runId) ?? { code: 0, docs: 0 };
+    l.code += c.codeAdded + c.codeDeleted;
+    l.docs += c.docAdded + c.docDeleted;
+    lines.set(c.runId, l);
+  }
+  let code = emptyTotals(), docs = emptyTotals(), direct = emptyTotals();
+  for (const r of runs) {
+    const l = lines.get(r.runId);
+    if (r.issueId !== t.issueId || !l || l.code + l.docs === 0) continue;
+    const own = addTotals(emptyTotals(), r, ttl);
+    const f = l.code / (l.code + l.docs);
+    code = plus(code, own, f);
+    docs = plus(docs, own, 1 - f);
+    direct = plus(direct, own);
+  }
+  const rest = plus(t.t, direct, -1);
+  const all = t.codeLines + t.docLines;
+  const f = all > 0 ? t.codeLines / all : 0;
+  // Runs aren't split: a run that changed both counts in both.
+  t.codeT = { ...plus(code, rest, f), runs: t.t.runs };
+  t.docT = { ...plus(docs, rest, 1 - f), runs: t.t.runs };
+}
+
+/** A task's tokens and cost for the lines counted. */
 export function totalsIn(t: TaskEfficiency, mode: DocMode): Totals {
-  const f = shareOf(t, mode);
-  return f === 1 ? t.t : { cost: scale(t.t.cost, f), tokens: scale(t.t.tokens, f), runs: t.t.runs };
+  return mode === "code" ? t.codeT : mode === "docs" ? t.docT : t.t;
 }
 
 export type Efficiency = { tasks: number; lines: number; t: Totals; tokensPerLine: number; costPerLine: number };

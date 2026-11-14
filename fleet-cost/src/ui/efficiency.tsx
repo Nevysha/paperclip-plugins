@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useHostNavigation } from "@paperclipai/plugin-sdk/ui";
 import { daysBetween, weekKey, weeksBetween, type CacheTtl } from "../pricing.js";
-import { buildTasks, efficiencyOf, inMode, linesOf, totalsIn, type CommitRow, type DocMode, type IssueUsage, type TaskEfficiency } from "../lens.js";
-import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, pct, tok, usd, useChartKind, type Bucket, type Series } from "./common.js";
-import { inPeriod, type Period } from "./cost.js";
+import { buildTasks, efficiencyOf, inMode, linesOf, totalsIn, type CommitRow, type DocMode, type IssueUsage, type RunUsage, type TaskEfficiency } from "../lens.js";
+import { Legend, Seg, Tile, TimeChart, dayLabel, localToday, pct, tok, usd, useChartKind, useFilter, type Bucket, type Series } from "./common.js";
+import { PERIODS, inPeriod, type Period } from "./cost.js";
 
-export type EfficiencyData = { usage: IssueUsage[]; commits: CommitRow[]; timeZone: string; generatedAt: string };
+export type EfficiencyData = { usage: IssueUsage[]; commits: CommitRow[]; runs?: RunUsage[]; timeZone: string; generatedAt: string };
 
 const MODE_LABEL: Record<DocMode, string> = { all: "All lines", code: "Without docs", docs: "Docs only" };
 const LINES_NOTE: Record<DocMode, string> = {
@@ -20,14 +20,14 @@ const short = (s: string | null, n = 60) => (s && s.length > n ? s.slice(0, n) +
 
 export function EfficiencyView({ data, ttl }: { data: EfficiencyData; ttl: CacheTtl }) {
   const nav = useHostNavigation();
-  const [mode, setMode] = useState<DocMode>("code");
-  const [period, setPeriod] = useState<Period>("all");
-  const [grain, setGrain] = useState<"day" | "week">("week");
-  const [sort, setSort] = useState<Sort>("cost");
+  const [mode, setMode] = useFilter<DocMode>("efficiency", "lines", ["all", "code", "docs"], "code");
+  const [period, setPeriod] = useFilter<Period>("efficiency", "period", PERIODS, "all");
+  const [grain, setGrain] = useFilter("efficiency", "grain", ["day", "week"], "week");
+  const [sort, setSort] = useFilter<Sort>("efficiency", "sort", ["perLine", "cost", "newest"], "cost");
   const [chartKind, setChartKind] = useChartKind("efficiency", "bars");
   const today = localToday();
 
-  const built = useMemo(() => buildTasks(data.usage, data.commits, ttl), [data, ttl]);
+  const built = useMemo(() => buildTasks(data.usage, data.commits, ttl, data.runs ?? []), [data, ttl]);
 
   const view = useMemo(() => {
     const keep = inPeriod(period, today);
@@ -105,8 +105,9 @@ export function EfficiencyView({ data, ttl }: { data: EfficiencyData; ttl: Cache
           </table>
         </div>
         <p className="fc-foot" style={{ margin: 0 }}>
-          A task that changed code and docs is split between &quot;Without docs&quot; and &quot;Docs only&quot; by its line counts, tokens and cost included,
-          so the two add up to &quot;All lines&quot;. It counts as a task in both.
+          A task that changed code and docs counts in both &quot;Without docs&quot; and &quot;Docs only&quot;. Each run that committed gives its tokens
+          to the code and doc lines of its own commits; the task&apos;s other runs (reviews, plans, retries) are split by its line counts. So lines, tokens
+          and cost add up to &quot;All lines&quot;. The per-line figures don&apos;t: &quot;All lines&quot; is the average of the other two, weighted by their lines.
         </p>
       </section>
 

@@ -172,12 +172,22 @@ const issueUsageSql = `
 const commitsSql = (ns: string) => `
   SELECT c.sha, c.pr_number, c.pr_title, ${DAY("c.pr_merged_at")} AS merged_day, c.match_method,
          c.code_added, c.code_deleted, c.doc_added, c.doc_deleted, c.code_files, c.doc_files,
-         coalesce(r.issue_id, t.id) AS issue_id, r.agent_id, a.name AS agent_name
+         coalesce(r.issue_id, t.id) AS issue_id, r.id AS run_id, r.agent_id, a.name AS agent_name
   FROM ${ns}.commits c
   LEFT JOIN public.heartbeat_runs r ON r.id = c.run_id AND r.company_id = $1
   LEFT JOIN public.agents a ON a.id = r.agent_id
   LEFT JOIN public.issues t ON t.company_id = $1 AND t.identifier = substring(c.pr_title, '([A-Z][A-Z0-9]*-[0-9]+)')
   WHERE c.company_id = $1`;
+
+// The usage of each run that made a merged commit, so a task's tokens can be split
+// between code and docs by what each of its runs committed.
+const commitRunsSql = (ns: string) => `
+  SELECT r.id AS run_id, r.issue_id, coalesce(r.usage_json->>'model', '') AS model,
+         ${num("inputTokens")}::text AS input, ${num("cacheWriteTokens")}::text AS cache_write,
+         ${num("cachedInputTokens")}::text AS cached, ${num("outputTokens")}::text AS output
+  FROM public.heartbeat_runs r
+  WHERE r.company_id = $1 AND r.usage_json IS NOT NULL
+    AND r.id IN (SELECT run_id FROM ${ns}.commits WHERE company_id = $1 AND run_id IS NOT NULL)`;
 
 type IssueRaw = {
   issue_id: string | null; issue_identifier: string | null; issue_title: string | null; model: string; runs: number;
@@ -186,14 +196,16 @@ type IssueRaw = {
 type CommitRaw = {
   sha: string; pr_number: number; pr_title: string; merged_day: string | null; match_method: string;
   code_added: number; code_deleted: number; doc_added: number; doc_deleted: number; code_files: number; doc_files: number;
-  issue_id: string | null; agent_id: string | null; agent_name: string | null;
+  issue_id: string | null; run_id: string | null; agent_id: string | null; agent_name: string | null;
 };
+type CommitRunRaw = { run_id: string; issue_id: string | null; model: string; input: string; cache_write: string; cached: string; output: string };
 
 async function efficiency(ctx: PluginContext, input: PluginApiRequestInput) {
   const tz = validTimeZone(input.query.tz) ?? "UTC";
-  const [issues, commits] = await Promise.all([
+  const [issues, commits, runs] = await Promise.all([
     ctx.db.query<IssueRaw>(issueUsageSql, [input.companyId, tz]),
     ctx.db.query<CommitRaw>(commitsSql(ctx.db.namespace), [input.companyId, tz]),
+    ctx.db.query<CommitRunRaw>(commitRunsSql(ctx.db.namespace), [input.companyId]),
   ]);
   return {
     body: {
@@ -208,7 +220,11 @@ async function efficiency(ctx: PluginContext, input: PluginApiRequestInput) {
         sha: c.sha, prNumber: Number(c.pr_number), prTitle: c.pr_title, mergedDay: c.merged_day, matchMethod: c.match_method,
         codeAdded: Number(c.code_added), codeDeleted: Number(c.code_deleted), docAdded: Number(c.doc_added),
         docDeleted: Number(c.doc_deleted), codeFiles: Number(c.code_files), docFiles: Number(c.doc_files),
-        issueId: c.issue_id, agentId: c.agent_id, agentName: c.agent_name,
+        issueId: c.issue_id, runId: c.run_id, agentId: c.agent_id, agentName: c.agent_name,
+      })),
+      runs: runs.map((r) => ({
+        runId: r.run_id, issueId: r.issue_id, model: r.model,
+        input: Number(r.input), cacheWrite: Number(r.cache_write), cached: Number(r.cached), output: Number(r.output),
       })),
     },
   };

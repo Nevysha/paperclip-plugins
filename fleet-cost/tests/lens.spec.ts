@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTasks, efficiencyOf, groupTools, median, startShare, type CommitRow, type IssueUsage, type RunStat, type ToolRow } from "../src/lens.js";
+import { buildTasks, efficiencyOf, groupTools, median, startShare, type CommitRow, type IssueUsage, type RunStat, type RunUsage, type ToolRow } from "../src/lens.js";
 import { parseIngest } from "../src/ingest.js";
 
 const tool = (over: Partial<ToolRow>): ToolRow => ({
@@ -12,7 +12,10 @@ const usage = (over: Partial<IssueUsage>): IssueUsage => ({
 });
 const commit = (over: Partial<CommitRow>): CommitRow => ({
   sha: "x", prNumber: 1, prTitle: "P (NEV-1)", mergedDay: "2026-11-11", matchMethod: "hash",
-  codeAdded: 0, codeDeleted: 0, docAdded: 0, docDeleted: 0, codeFiles: 0, docFiles: 0, issueId: "i1", agentId: "a", agentName: "A", ...over,
+  codeAdded: 0, codeDeleted: 0, docAdded: 0, docDeleted: 0, codeFiles: 0, docFiles: 0, issueId: "i1", runId: null, agentId: "a", agentName: "A", ...over,
+});
+const run = (over: Partial<RunUsage>): RunUsage => ({
+  runId: "r1", issueId: "i1", model: "claude-opus-5-5", input: 0, cacheWrite: 0, cached: 0, output: 0, ...over,
 });
 
 describe("tools", () => {
@@ -69,6 +72,28 @@ describe("efficiency", () => {
     expect(code!.lines + docs!.lines).toBe(all!.lines);
     expect(code!.t.tokens.total + docs!.t.tokens.total).toBeCloseTo(all!.t.tokens.total);
     expect(code!.t.cost.total + docs!.t.cost.total).toBeCloseTo(all!.t.cost.total);
+  });
+  it("gives each committing run's tokens to the lines of its own commits", () => {
+    // i1: 10M tokens. r1 wrote 100 code lines with 2M, r2 wrote 100 doc lines with 6M; 2M went to runs that committed nothing.
+    const { tasks } = buildTasks(
+      [usage({ cached: 10_000_000 })],
+      [commit({ runId: "r1", codeAdded: 100 }), commit({ sha: "y", runId: "r2", docAdded: 100 })],
+      "1h",
+      [run({ cached: 2_000_000 }), run({ runId: "r2", cached: 6_000_000 }), run({ runId: "r3", issueId: "other", cached: 50_000_000 })],
+    );
+    const [all, code, docs] = (["all", "code", "docs"] as const).map((m) => efficiencyOf(tasks, m));
+    expect(code!.t.tokens.total).toBeCloseTo(3_000_000); // r1's 2M and half of the other 2M
+    expect(docs!.t.tokens.total).toBeCloseTo(7_000_000); // r2's 6M and the other half
+    expect(code!.t.cost.total + docs!.t.cost.total).toBeCloseTo(all!.t.cost.total);
+  });
+  it("splits a run that committed both by its lines, and ignores runs whose commits changed no counted line", () => {
+    const { tasks } = buildTasks(
+      [usage({ cached: 4_000_000 })],
+      [commit({ runId: "r1", codeAdded: 30, docAdded: 10 }), commit({ sha: "y", runId: "r2" })],
+      "1h",
+      [run({ cached: 2_000_000 }), run({ runId: "r2", cached: 2_000_000 })],
+    );
+    expect(efficiencyOf(tasks, "code").t.tokens.total).toBeCloseTo(3_000_000); // 3/4 of each 2M
   });
 });
 
