@@ -22,7 +22,7 @@ A **Dependencies** page that draws which tasks wait on which, as a graph, and wh
   - **Holds up N:** open, waits on no other task, and has N open tasks downstream. This is where a chain has to move. It may still be marked Blocked for another reason, such as waiting on a person or a card.
   - **Loop:** tasks that wait on each other in a circle, so none of them can start.
   - **Needs you:** blocked, with no open blocker and nothing running, and its unblock note names the board or a user.
-  - **No wake-up:** blocked, with no open blocker, no running job, no CI wait, and no person named. Nothing will wake it; often a background job that died.
+  - **No wake-up:** blocked, with no open blocker, no running job, no CI wait, and no person named. Nothing will wake it; often a background job that died. Its side panel has a **Wake it** button (stale tasks too): after a confirmation it moves the task to To do, posts a comment saying it was woken up by hand because something may have gone wrong, and how to block it properly next time, and asks Paperclip to wake its assigned agent. The worker checks again first and refuses if the task is no longer blocked, waits on an open task, has a job or CI wait running, or has no agent assigned.
 - **Waiting for** (in a task's side panel): the task's unblock note (who it waits on and for what, which agents set when they block a task), and the details of its jobs and CI waits.
 - **Needs attention** (the side panel when nothing is selected): what waits on you, blocked tasks nothing will wake, quiet jobs, stale waits, loops, and the tasks holding up the most work.
 - A **Dependencies** button in the header, with an amber count of tasks waiting on you, blocked tasks nothing will wake, and stale waits. A sidebar link exists too, but the coordinator sidebar doesn't show plugin links.
@@ -31,7 +31,7 @@ The page refreshes every 30 seconds. Drag to move, scroll to zoom, or use **+**,
 
 ## How it works
 
-The worker reads `issues` (including `unblock_descriptor`, the unblock note), `issue_relations` (type `blocks`: `issue_id` blocks `related_issue_id`), `agents` and `projects` for the company. It writes nothing and owns no tables. Outside the database it scans `/proc` for processes whose command line calls `paperclip-notify NEV-123` (`src/waits.ts`), following their standard output to the log file, and reads the CI waits in the watchdog's `~/.paperclip-dev/watchdog/waits.json`. A job that dies simply disappears, so nothing has to be registered or cleaned up. The page does the analysis (`src/graph.ts`) and lays the graph out with [dagre](https://github.com/dagrejs/dagre), pinned to 3.1.3 and bundled into the UI.
+The worker reads `issues` (including `unblock_descriptor`, the unblock note), `issue_relations` (type `blocks`: `issue_id` blocks `related_issue_id`), `agents` and `projects` for the company. It owns no tables, and its only write is the Wake it button (`POST /tasks/:id/wake`, board only), which needs `issues.update`, `issue.comments.create` and `issues.wakeup`. Outside the database it scans `/proc` for processes whose command line calls `paperclip-notify NEV-123` (`src/waits.ts`), following their standard output to the log file, and reads the CI waits in the watchdog's `~/.paperclip-dev/watchdog/waits.json`. A job that dies simply disappears, so nothing has to be registered or cleaned up. The page does the analysis (`src/graph.ts`) and lays the graph out with [dagre](https://github.com/dagrejs/dagre), pinned to 3.1.3 and bundled into the UI.
 
 ## Develop
 

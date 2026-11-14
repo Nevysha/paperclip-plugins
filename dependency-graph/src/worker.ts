@@ -1,7 +1,7 @@
 import { definePlugin, runWorker, type PluginApiRequestInput, type PluginContext } from "@paperclipai/plugin-sdk";
 import { userInfo } from "node:os";
 import { join } from "node:path";
-import type { GraphData, Unblock, Wait } from "./graph.js";
+import { wakeComment, type GraphData, type Unblock, type Wait } from "./graph.js";
 import { readRegisteredWaits, scanJobs } from "./waits.js";
 
 // The watchdog's folder, where paperclip-wait registers CI waits.
@@ -88,6 +88,43 @@ async function graph(ctx: PluginContext, input: PluginApiRequestInput): Promise<
   };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const WAKE_TASK_SQL = `
+  SELECT i.identifier, i.status, i.assignee_agent_id, i.unblock_descriptor->>'action' AS unblock_action,
+         (SELECT count(*) FROM public.issue_relations r JOIN public.issues b ON b.id = r.issue_id
+           WHERE r.related_issue_id = i.id AND r.type = 'blocks' AND b.status NOT IN ('done', 'cancelled'))::int AS open_blockers,
+         (SELECT count(*) FROM public.issue_relations r WHERE r.related_issue_id = i.id AND r.type = 'blocks')::int AS blockers
+  FROM public.issues i
+  WHERE i.id = $1 AND i.company_id = $2 AND i.hidden_at IS NULL`;
+
+/** The board's "Wake it" button: only for a blocked task with no open blocker and nothing running for it. */
+async function wake(ctx: PluginContext, input: PluginApiRequestInput) {
+  const id = input.params.id;
+  if (!id || !UUID.test(id)) return fail(400, "Unknown task");
+  const [t] = await ctx.db.query<{
+    identifier: string | null; status: string; assignee_agent_id: string | null; unblock_action: string | null;
+    open_blockers: number; blockers: number;
+  }>(WAKE_TASK_SQL, [id, input.companyId]);
+  if (!t) return fail(404, "Unknown task");
+  if (t.status !== "blocked") return fail(409, "It isn't blocked any more");
+  if (t.open_blockers > 0) return fail(409, "It still waits on an open task");
+  if (!t.assignee_agent_id) return fail(409, "No agent is assigned to it, so there's nobody to wake");
+  const [jobs, registered] = await Promise.all([scanJobs().catch(() => []), readRegisteredWaits(WAITS_FILE)]);
+  if (t.identifier && (jobs.some((j) => j.issue === t.identifier) || registered.some((w) => w.issue === t.identifier && w.kind === "ci"))) {
+    return fail(409, "A background job or CI wait is still running for it, and will wake it");
+  }
+  const actor = { actorUserId: input.actor.userId ?? null };
+  await ctx.issues.update(id, { status: "todo" }, input.companyId, actor);
+  await ctx.issues.createComment(id, wakeComment({ unblockAction: t.unblock_action, stale: t.blockers > 0 }), input.companyId);
+  const woke = await ctx.issues.requestWakeup(id, input.companyId, {
+    ...actor, reason: "Woken from the Dependencies page", contextSource: "dependency-graph",
+    idempotencyKey: `dependency-graph-wake:${id}:${Math.floor(Date.now() / 60_000)}`,
+  });
+  ctx.logger.info("Woke a blocked task", { issue: t.identifier, queued: woke.queued });
+  return { status: 200, body: { identifier: t.identifier, queued: woke.queued, runId: woke.runId } };
+}
+
 const plugin = definePlugin({
   async setup(ctx) {
     pluginCtx = ctx;
@@ -102,6 +139,14 @@ const plugin = definePlugin({
       } catch (err) {
         ctx.logger.error("Couldn't read task dependencies", { error: String(err) });
         return fail(500, "Couldn't read task dependencies");
+      }
+    }
+    if (input.routeKey === "wake") {
+      try {
+        return await wake(ctx, input);
+      } catch (err) {
+        ctx.logger.error("Couldn't wake a task", { error: String(err) });
+        return fail(500, `Couldn't wake it: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
       }
     }
     return fail(404, "Unknown route");
