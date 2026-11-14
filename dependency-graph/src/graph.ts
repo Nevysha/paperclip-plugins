@@ -11,7 +11,26 @@ export type Task = {
   updatedAt: string;
   /** What a blocked task says it waits for (Paperclip's unblock note), if it set one. */
   unblock?: Unblock | null;
+  /** An agent run queued or running for this task right now (from Paperclip's live runs), if any. */
+  activeRun?: ActiveRun | null;
 };
+
+export type ActiveRun = { status: string; agentName: string | null };
+
+/** One entry of Paperclip's `GET /api/companies/:id/live-runs` (queued and running runs). */
+export type LiveRun = { status?: string | null; issueId?: string | null; agentName?: string | null };
+
+/** Marks the tasks that have a queued or running agent run. */
+export function withLiveRuns(data: GraphData, runs: LiveRun[]): GraphData {
+  const byTask = new Map<string, ActiveRun>();
+  for (const r of runs) {
+    if (!r.issueId || (r.status !== "queued" && r.status !== "running")) continue;
+    // A running run says more than a queued one.
+    if (byTask.get(r.issueId)?.status === "running") continue;
+    byTask.set(r.issueId, { status: r.status, agentName: r.agentName ?? null });
+  }
+  return { ...data, tasks: data.tasks.map((t) => ({ ...t, activeRun: byTask.get(t.id) ?? null })) };
+}
 
 /** owner "person": the board or a user, so it's waiting on a human. */
 export type Unblock = { owner: "person" | "agent"; ownerName: string | null; action: string };
@@ -71,8 +90,10 @@ export type NodeInfo = {
   blockers: string[];
   blocks: string[];
   openBlockers: string[];
-  /** Status is `blocked` and it has blockers, but every one of them is closed. */
+  /** Status is `blocked` and it has blockers, but every one of them is closed, and no agent is working on it. */
   staleWait: boolean;
+  /** Open, and an agent run is queued or running for it: whatever its status says, someone is on it. */
+  working: boolean;
   inCycle: boolean;
   /** Open tasks downstream of this one, directly or through other tasks. */
   holdingUp: number;
@@ -93,7 +114,7 @@ export function analyse(data: GraphData): Analysis {
   const out: Analysis = new Map();
   for (const task of data.tasks) {
     out.set(task.id, {
-      task, blockers: [], blocks: [], openBlockers: [], staleWait: false, inCycle: false, holdingUp: 0, isHead: false,
+      task, blockers: [], blocks: [], openBlockers: [], staleWait: false, working: false, inCycle: false, holdingUp: 0, isHead: false,
       waits: [], needsPerson: false, unattended: false,
     });
   }
@@ -107,8 +128,11 @@ export function analyse(data: GraphData): Analysis {
   }
   for (const info of out.values()) {
     info.openBlockers = info.blockers.filter((id) => !isClosed(byId.get(id)!.status));
-    info.staleWait = info.task.status === "blocked" && info.blockers.length > 0 && info.openBlockers.length === 0;
-    const idle = info.task.status === "blocked" && info.openBlockers.length === 0 && info.waits.length === 0 && !info.staleWait;
+    // Closing the last blocker wakes the assignee, but the task stays `blocked` until that run moves it: not stale.
+    info.working = !isClosed(info.task.status) && !!info.task.activeRun;
+    info.staleWait = info.task.status === "blocked" && info.blockers.length > 0 && info.openBlockers.length === 0 && !info.working;
+    const idle = info.task.status === "blocked" && info.openBlockers.length === 0 && info.waits.length === 0
+      && !info.staleWait && !info.working;
     info.needsPerson = idle && info.task.unblock?.owner === "person";
     info.unattended = idle && !info.needsPerson;
   }

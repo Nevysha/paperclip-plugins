@@ -8,8 +8,8 @@ import {
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
-  analyse, chainOf, edgeKey, findTask, isClosed, isQuiet, select,
-  type Analysis, type Edge, type GraphData, type NodeInfo, type Scope, type Selection, type Task, type Wait,
+  analyse, chainOf, edgeKey, findTask, isClosed, isQuiet, select, withLiveRuns,
+  type Analysis, type Edge, type GraphData, type LiveRun, type NodeInfo, type Scope, type Selection, type Task, type Wait,
 } from "../graph.js";
 
 const API = "/api/plugins/nevysha.dependency-graph/api/graph";
@@ -30,11 +30,17 @@ function useGraphData(companyId: string | null, intervalMs: number) {
   useEffect(() => {
     if (!companyId) return;
     let live = true;
+    // Paperclip's own live runs (queued and running), so a blocked task an agent is already working on isn't
+    // flagged as stale. Optional: without them the page still works, just without the "Agent working" mark.
+    const runs = fetch(`/api/companies/${encodeURIComponent(companyId)}/live-runs?minCount=0`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((json) => (Array.isArray(json) ? (json as LiveRun[]) : []))
+      .catch(() => [] as LiveRun[]);
     fetch(`${API}?${new URLSearchParams({ companyId })}`)
       .then(async (res) => {
         const json = await res.json().catch(() => null);
         if (!res.ok) throw new Error(json?.error ?? `Request failed (${res.status})`);
-        return json as GraphData;
+        return withLiveRuns(json as GraphData, await runs);
       })
       .then((json) => { if (live) { setData(json); setError(null); } })
       .catch((err: Error) => { if (live) setError(err.message); });
@@ -330,11 +336,20 @@ function Seg<T extends string>({ value, options, onChange, label, disabled }: {
   );
 }
 
+function workingTitle(info: NodeInfo): string {
+  const r = info.task.activeRun;
+  const who = r?.agentName ?? "An agent";
+  return r?.status === "queued"
+    ? `${who} has a run queued for it, so it will pick it up soon (its status may lag until then)`
+    : `${who} is working on it right now (its status may lag until the run updates it)`;
+}
+
 function Badges({ info }: { info: NodeInfo }) {
   return (
     <>
       {info.inCycle ? <span className="dg-badge bad" title="This task is part of a loop of tasks blocking each other">Loop</span> : null}
       {info.staleWait ? <span className="dg-badge warn" title="Still blocked, but every blocker is closed">Stale</span> : null}
+      {info.working ? <span className="dg-badge head" title={workingTitle(info)}>Agent working</span> : null}
       {info.needsPerson ? <span className="dg-badge head" title="Blocked until a person acts; nothing else is running for it">Needs you</span> : null}
       {info.unattended ? <span className="dg-badge warn" title="Blocked, but it waits on no open task, no running job, no CI and no person: nothing will wake it">No wake-up</span> : null}
       {info.isHead && !info.inCycle ? <span className="dg-badge head" title={`Open, waiting on no other task, and holding up ${plural(info.holdingUp, "open task")}`}>Holds up {info.holdingUp}</span> : null}

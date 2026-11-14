@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import manifest from "../src/manifest.js";
-import { analyse, chainOf, findTask, isQuiet, wakeComment, select, type GraphData, type Relation, type SelectOptions, type Task, type Wait } from "../src/graph.js";
+import { analyse, chainOf, findTask, isQuiet, wakeComment, select, withLiveRuns, type GraphData, type Relation, type SelectOptions, type Task, type Wait } from "../src/graph.js";
 
 const task = (n: number, status = "todo", over: Partial<Task> = {}): Task => ({
   id: `t${n}`, identifier: `NEV-${n}`, title: `Task ${n}`, status, priority: "medium", parentId: null,
@@ -33,6 +33,35 @@ describe("analyse", () => {
   it("flags a task still blocked after every blocker closed", () => {
     const a = analyse(data([task(1, "done"), task(2, "cancelled"), task(3, "blocked")], [blocks(1, 3), blocks(2, 3)]));
     expect(a.get("t3")!.staleWait).toBe(true);
+  });
+
+  it("doesn't flag a stale task an agent is already working on", () => {
+    // Closing the last blocker wakes the assignee; the task stays blocked until that run moves it.
+    const d = data([task(1, "done"), task(3, "blocked")], [blocks(1, 3)]);
+    const running = analyse(withLiveRuns(d, [{ issueId: "t3", status: "running", agentName: "DevOps" }])).get("t3")!;
+    expect(running.staleWait).toBe(false);
+    expect(running.working).toBe(true);
+    expect(running.unattended).toBe(false);
+    expect(running.task.activeRun).toEqual({ status: "running", agentName: "DevOps" });
+    const queued = analyse(withLiveRuns(d, [{ issueId: "t3", status: "queued", agentName: null }])).get("t3")!;
+    expect(queued.staleWait).toBe(false);
+    expect(queued.working).toBe(true);
+    // A finished run, or a run on another task, changes nothing.
+    const other = analyse(withLiveRuns(d, [{ issueId: "t3", status: "succeeded" }, { issueId: "t1", status: "running" }]));
+    expect(other.get("t3")!.staleWait).toBe(true);
+    expect(other.get("t1")!.working).toBe(false);
+  });
+
+  it("a blocked task with nothing to wake it isn't unattended while an agent works on it", () => {
+    const d = data([task(1, "blocked")], []);
+    expect(analyse(d).get("t1")!.unattended).toBe(true);
+    expect(analyse(withLiveRuns(d, [{ issueId: "t1", status: "running" }])).get("t1")!.unattended).toBe(false);
+  });
+
+  it("prefers a running run over a queued one for the same task", () => {
+    const d = withLiveRuns(data([task(1, "blocked")], []), [
+      { issueId: "t1", status: "running", agentName: "A" }, { issueId: "t1", status: "queued", agentName: "B" }]);
+    expect(d.tasks[0].activeRun).toEqual({ status: "running", agentName: "A" });
   });
 
   it("doesn't flag a blocked task with no blocker links", () => {
