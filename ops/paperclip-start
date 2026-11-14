@@ -97,8 +97,10 @@ else
          PAPERCLIP_CONTEXT="$DATA/context.json"
          PAPERCLIP_MIGRATION_PROMPT=never
          PAPERCLIP_MIGRATION_AUTO_APPLY=false
-         # Tailscale serve (https://paperclip.tailb0dfdd.ts.net) proxies to localhost:3100
-         PAPERCLIP_ALLOWED_HOSTNAMES=paperclip.tailb0dfdd.ts.net)
+         # Caddy on the tailnet IP proxies both names to localhost:3100:
+         # https://paperclip.tailb0dfdd.ts.net (Tailscale cert) and
+         # https://paperclip.local.nevysha.dev (wildcard Let's Encrypt cert, tailnet-only DNS target)
+         PAPERCLIP_ALLOWED_HOSTNAMES=paperclip.tailb0dfdd.ts.net,paperclip.local.nevysha.dev)
   cd "$REL"
   # Since 2026-11 the server exits with code 1 when it loses its instance lease
   # (for example, the database stalled for over 60 s) and expects a supervisor to
