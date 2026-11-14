@@ -18,7 +18,8 @@ message="$*"
 
 NODE="$(command -v node || true)"
 if [ -z "$NODE" ]; then
-  export NVM_DIR="$HOME/.nvm"
+  # The account's real home: an agent run's HOME is a per-run sandbox folder without nvm.
+  export NVM_DIR="$(getent passwd "$(id -un)" | cut -d: -f6)/.nvm"
   # shellcheck disable=SC1091
   . "$NVM_DIR/nvm.sh" >/dev/null
   NODE="$(command -v node)"

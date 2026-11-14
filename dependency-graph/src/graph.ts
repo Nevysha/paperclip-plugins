@@ -9,7 +9,35 @@ export type Task = {
   assigneeName: string | null;
   assignedToUser: boolean;
   updatedAt: string;
+  /** What a blocked task says it waits for (Paperclip's unblock note), if it set one. */
+  unblock?: Unblock | null;
 };
+
+/** owner "person": the board or a user, so it's waiting on a human. */
+export type Unblock = { owner: "person" | "agent"; ownerName: string | null; action: string };
+
+/**
+ * Something outside Paperclip a task waits on, drawn as its own box linked to the task.
+ * job: a background process that will run paperclip-notify for the task. ci: a CI wait registered with paperclip-wait.
+ */
+export type Wait = {
+  id: string;
+  taskId: string;
+  kind: "job" | "ci";
+  title: string;
+  /** Job: the last line of its log. CI: the agent's note. */
+  detail: string | null;
+  since: string | null;
+  /** Job: where its output goes, and when that file last changed. */
+  log?: string | null;
+  logUpdatedAt?: string | null;
+  pid?: number;
+};
+
+/** A job whose log hasn't changed for this long gets a "quiet" mark: it may be stuck. */
+export const QUIET_MS = 30 * 60_000;
+export const isQuiet = (w: Wait, now = Date.now()) =>
+  w.kind === "job" && !!w.logUpdatedAt && now - new Date(w.logUpdatedAt).getTime() > QUIET_MS;
 
 /** `blockerId` blocks `blockedId`: the blocked task waits until the blocker is done or cancelled. */
 export type Relation = { blockerId: string; blockedId: string };
@@ -18,6 +46,8 @@ export type GraphData = {
   tasks: Task[];
   relations: Relation[];
   projects: Array<{ id: string; name: string }>;
+  /** Older workers don't send it. */
+  waits?: Wait[];
   generatedAt: string;
 };
 
@@ -35,6 +65,12 @@ export type NodeInfo = {
   holdingUp: number;
   /** Open, holds up open work, and waits on no open blocker: the place the chain has to move. */
   isHead: boolean;
+  /** Running jobs and CI waits for this task. */
+  waits: Wait[];
+  /** Blocked on a person (its unblock note names the board or a user), with no open blocker and nothing running. */
+  needsPerson: boolean;
+  /** Blocked with no open blocker, nothing running and no person named: nothing will wake it. */
+  unattended: boolean;
 };
 
 export type Analysis = Map<string, NodeInfo>;
@@ -43,8 +79,12 @@ export function analyse(data: GraphData): Analysis {
   const byId = new Map(data.tasks.map((t) => [t.id, t]));
   const out: Analysis = new Map();
   for (const task of data.tasks) {
-    out.set(task.id, { task, blockers: [], blocks: [], openBlockers: [], staleWait: false, inCycle: false, holdingUp: 0, isHead: false });
+    out.set(task.id, {
+      task, blockers: [], blocks: [], openBlockers: [], staleWait: false, inCycle: false, holdingUp: 0, isHead: false,
+      waits: [], needsPerson: false, unattended: false,
+    });
   }
+  for (const w of data.waits ?? []) out.get(w.taskId)?.waits.push(w);
   for (const r of data.relations) {
     const blocker = out.get(r.blockerId);
     const blocked = out.get(r.blockedId);
@@ -55,6 +95,9 @@ export function analyse(data: GraphData): Analysis {
   for (const info of out.values()) {
     info.openBlockers = info.blockers.filter((id) => !isClosed(byId.get(id)!.status));
     info.staleWait = info.task.status === "blocked" && info.blockers.length > 0 && info.openBlockers.length === 0;
+    const idle = info.task.status === "blocked" && info.openBlockers.length === 0 && info.waits.length === 0 && !info.staleWait;
+    info.needsPerson = idle && info.task.unblock?.owner === "person";
+    info.unattended = idle && !info.needsPerson;
   }
   for (const scc of stronglyConnected([...out.keys()], (id) => out.get(id)!.blocks)) {
     if (scc.length > 1) for (const id of scc) out.get(id)!.inCycle = true;
@@ -69,7 +112,8 @@ export function analyse(data: GraphData): Analysis {
   return out;
 }
 
-export type Edge = { from: string; to: string; kind: "blocks" | "parent"; resolved: boolean };
+/** A "wait" edge goes from a Wait box (its id) to its task. */
+export type Edge = { from: string; to: string; kind: "blocks" | "parent" | "wait"; resolved: boolean };
 
 export type Scope = "open" | "all";
 
@@ -81,7 +125,8 @@ export type SelectOptions = {
   projectId: string | null;
 };
 
-export type Selection = { nodeIds: string[]; edges: Edge[] };
+/** nodeIds are tasks; waitIds are the Wait boxes drawn next to them. */
+export type Selection = { nodeIds: string[]; waitIds: string[]; edges: Edge[] };
 
 /** The tasks and links to draw for the chosen scope. */
 export function select(data: GraphData, analysis: Analysis, opts: SelectOptions): Selection {
@@ -97,6 +142,15 @@ export function select(data: GraphData, analysis: Analysis, opts: SelectOptions)
       }
     }
   }
+  const waitIds = new Set<string>();
+  for (const info of analysis.values()) {
+    if (isClosed(info.task.status) || !inProject(info.task.id)) continue;
+    for (const w of info.waits) {
+      waitIds.add(w.id);
+      edges.push({ from: w.id, to: info.task.id, kind: "wait", resolved: false });
+    }
+  }
+  const isOpen = (id: string) => waitIds.has(id) || !isClosed(analysis.get(id)!.task.status);
   if (opts.parentLinks) {
     for (const t of data.tasks) {
       if (t.parentId && inProject(t.id) && inProject(t.parentId)) {
@@ -112,18 +166,23 @@ export function select(data: GraphData, analysis: Analysis, opts: SelectOptions)
     keep = new Set([...reach(opts.focusId, (id) => fwd.get(id) ?? []), ...reach(opts.focusId, (id) => back.get(id) ?? [])]);
   } else {
     const touched = new Set(edges.flatMap((e) => [e.from, e.to]));
+    // A blocked task is drawn even with no links, so what it waits on (or that nothing is coming) shows.
+    for (const info of analysis.values()) if (info.task.status === "blocked" && inProject(info.task.id)) touched.add(info.task.id);
     keep = new Set();
     for (const component of components([...touched], edges)) {
-      if (opts.scope === "all" || component.some((id) => !isClosed(analysis.get(id)!.task.status))) {
+      if (opts.scope === "all" || component.some(isOpen)) {
         for (const id of component) keep.add(id);
       }
     }
   }
   if (!opts.showClosed) {
-    keep = new Set([...keep].filter((id) => id === opts.focusId || !isClosed(analysis.get(id)!.task.status)));
+    keep = new Set([...keep].filter((id) => id === opts.focusId || isOpen(id)));
   }
+  // A task's waits always come with it (a focused chain only follows links one way from the focus).
+  for (const e of edges) if (e.kind === "wait" && keep.has(e.to)) keep.add(e.from);
   edges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
-  return { nodeIds: [...keep], edges };
+  const ids = [...keep];
+  return { nodeIds: ids.filter((id) => !waitIds.has(id)), waitIds: ids.filter((id) => waitIds.has(id)), edges };
 }
 
 /** Everything upstream and downstream of `id` along the drawn links, including `id`. */
