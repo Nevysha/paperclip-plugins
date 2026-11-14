@@ -15,6 +15,8 @@
 //      Actions), comment on the open task named in the commit message or branch (or whose
 //      recent comments name the commit), which wakes its owner. It also notes when Forgejo's
 //      mirror of space-4x's main on GitHub falls behind.
+//   6. Sliced label; 7. Wake loops: an agent restarting on the same issue again and again
+//      with nothing to do (see wake-loops.mjs) is reported in the header, never acted on.
 // Steps 2-5 start agent runs, so they're skipped while Claude usage is at or
 // over the gate in ~/.paperclip-dev/claude-usage.json. Never sends cards, never
 // closes tasks as done, never starts Paperclip when it's down.
@@ -27,6 +29,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, chm
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { findWakeLoops } from "./wake-loops.mjs";
 
 const HOME = homedir();
 const API = "http://localhost:3100/api";
@@ -81,7 +84,7 @@ function writeJsonAtomic(path, value) {
 }
 
 const state = Object.assign(
-  { ciSeen: {}, ciPending: {}, ciDelivered: {}, nudged: {}, woke: {}, restarts: [], copies: [], nudges: [], recentActions: [] },
+  { ciSeen: {}, ciPending: {}, ciDelivered: {}, nudged: {}, woke: {}, loopsLogged: {}, restarts: [], copies: [], nudges: [], recentActions: [] },
   readJson(FILES.state, {}),
 );
 const within = (list, ms) => list.filter((t) => now - t < ms);
@@ -367,6 +370,21 @@ async function main() {
   // Only the label changes, so this runs even while the usage gate is closed.
   await labelSliced(issues);
 
+  // 7. Wake loops: report only. Pausing the agent is a person's call (it cancels its run).
+  const identById = new Map(issues.map((i) => [i.id, i.identifier]));
+  const loops = findWakeLoops(runs, now).map((l) => ({
+    ...l, agent: agentById.get(l.agentId)?.name ?? l.agentId, issue: identById.get(l.issueId) ?? l.issueId,
+  }));
+  for (const l of loops) {
+    const msg = `Wake loop: ${l.agent} restarted ${l.runs} times on ${l.issue} in 10 min with short runs (${l.reasons.join(", ") || "no wake reason"}). Pause the agent if it has nothing to do.`;
+    notes.push(msg);
+    const key = `${l.agentId}:${l.issueId}`;
+    if (!state.loopsLogged[key] || now - state.loopsLogged[key] > 30 * MIN) { log("warn", msg); state.loopsLogged[key] = now; }
+  }
+  if (loops.length) {
+    return finish({ healthy: false, summary: `Wake loop: ${loops.map((l) => `${l.agent} on ${l.issue}`).join(", ")}`, wakeLoops: loops });
+  }
+
   return finish({ healthy: true, summary: actions.length ? `${actions.length} action(s) this tick` : "All clear" });
 }
 
@@ -528,7 +546,7 @@ function finish(extra) {
   state.restarts = within(state.restarts, 7 * DAY);
   state.copies = within(state.copies, 7 * DAY);
   state.nudges = within(state.nudges, 7 * DAY);
-  for (const m of [state.nudged, state.woke]) for (const k of Object.keys(m)) if (now - m[k] > 7 * DAY) delete m[k];
+  for (const m of [state.nudged, state.woke, state.loopsLogged]) for (const k of Object.keys(m)) if (now - m[k] > 7 * DAY) delete m[k];
   if (!DRY) writeJsonAtomic(FILES.state, state);
   writeStatus(extra);
 }
