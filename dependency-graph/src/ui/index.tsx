@@ -143,7 +143,8 @@ const CSS = `
 .dg-id{font-weight:600;color:var(--foreground);font-variant-numeric:tabular-nums}
 .dg-dot{width:8px;height:8px;border-radius:999px;background:var(--dg-st);flex:none}
 .dg-title{font-size:12.5px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.dg-badge{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:4px;line-height:16px;white-space:nowrap}
+.dg-badge{font-size:10.5px;font-weight:600;padding:0 5px;border-radius:4px;line-height:16px;white-space:nowrap;flex:none}
+.dg-top>span:not(.dg-badge):not(.dg-dot):not(.dg-id):not(.dg-push){overflow:hidden;text-overflow:ellipsis;min-width:0}
 .dg-badge.warn{color:var(--dg-warn);background:color-mix(in srgb,var(--dg-warn) 15%,transparent)}
 .dg-badge.bad{color:var(--dg-blocked);background:color-mix(in srgb,var(--dg-blocked) 14%,transparent)}
 .dg-badge.head{color:var(--dg-hi);background:color-mix(in srgb,var(--dg-hi) 14%,transparent)}
