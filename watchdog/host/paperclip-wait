@@ -8,14 +8,16 @@
 #   paperclip-wait --list
 #   paperclip-wait --cancel <id>
 #
-# Waits live in ~/.paperclip-dev/watchdog/waits.json and show in the Watchdog
-# button in Paperclip's header. A wait is dropped after 24 hours. The watchdog reads
+# Waits live in ~/.paperclip-dev/watchdog/waits.json (always the paperclip user's real
+# home, even when an agent run sets HOME to its own sandbox folder) and show in the
+# Watchdog button in Paperclip's header and on the Dependencies page. A wait is dropped after 24 hours. The watchdog reads
 # Nevysha/space-4x's CI from the host's Forgejo, and paperclip-plugins' from GitHub.
 set -euo pipefail
 
 NODE="$(command -v node || true)"
 if [ -z "$NODE" ]; then
-  export NVM_DIR="$HOME/.nvm"
+  # The account's real home: an agent run's HOME is a per-run sandbox folder without nvm.
+  export NVM_DIR="$(getent passwd "$(id -un)" | cut -d: -f6)/.nvm"
   # shellcheck disable=SC1091
   . "$NVM_DIR/nvm.sh" >/dev/null
   NODE="$(command -v node)"
@@ -28,7 +30,10 @@ const crypto = require("node:crypto");
 const os = require("node:os");
 
 const API = `http://localhost:${process.env.PAPERCLIP_PORT || 3100}/api`;
-const FILE = path.join(os.homedir(), ".paperclip-dev", "watchdog", "waits.json");
+// Not os.homedir(): agent runs set HOME to a per-run sandbox folder, so waits written there never
+// reached the watchdog (found 2026-11-14). The account's home from the password database is stable.
+const DIR = process.env.PAPERCLIP_WATCHDOG_DIR?.trim() || path.join(os.userInfo().homedir, ".paperclip-dev", "watchdog");
+const FILE = path.join(DIR, "waits.json");
 const REPOS = ["Nevysha/space-4x", "Nevysha/paperclip-plugins"];
 const args = process.argv.slice(2);
 const usage = () => {

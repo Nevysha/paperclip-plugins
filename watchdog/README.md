@@ -41,7 +41,7 @@ The panel shows:
 | File | What it is |
 |---|---|
 | `watchdog.mjs` | The watchdog. `--dry-run` logs what it would do without changing anything. |
-| `paperclip-wait` | Agents run `paperclip-wait NEV-123 --ci <branch or commit>` to register a CI wait. The watchdog comments on the task when CI finishes, which wakes its owner. |
+| `paperclip-wait` | Agents run `paperclip-wait NEV-123 --ci <branch or commit>` to register a CI wait. The watchdog comments on the task when CI finishes, which wakes its owner. It writes to the paperclip account's real home, not `$HOME`: agent runs set `HOME` to a per-run sandbox folder, and before 2026-11-14 their waits landed there and never reached the watchdog. The Dependencies page shows the waits too. |
 | `paperclip-notify` | Agents end a detached background job with `paperclip-notify NEV-123 "<result>"`. It posts a board comment that wakes the task's owner. |
 | `paperclip-watchdog.service`, `.timer` | The systemd user units. |
 | `install.sh` | Symlinks the scripts into `~/.local`, installs the units, and leaves the timer off at boot. |

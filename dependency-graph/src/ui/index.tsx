@@ -8,8 +8,8 @@ import {
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
-  analyse, chainOf, edgeKey, findTask, isClosed, select,
-  type Analysis, type Edge, type GraphData, type NodeInfo, type Scope, type Selection, type Task,
+  analyse, chainOf, edgeKey, findTask, isClosed, isQuiet, select,
+  type Analysis, type Edge, type GraphData, type NodeInfo, type Scope, type Selection, type Task, type Wait,
 } from "../graph.js";
 
 const API = "/api/plugins/nevysha.dependency-graph/api/graph";
@@ -77,6 +77,17 @@ function ago(iso: string): string {
   return `${Math.round(s / 86400)} days ago`;
 }
 
+/** "3 h", "12 min": how long since `iso`, for running things. */
+function since(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const m = Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return "under a minute";
+  if (m < 90) return `${Math.round(m)} min`;
+  if (m < 2160) return `${Math.round(m / 60)} h`;
+  return `${Math.round(m / 1440)} days`;
+}
+const WAIT_KIND: Record<Wait["kind"], string> = { job: "Job", ci: "CI" };
+
 // ---------------------------------------------------------------- styles
 
 const CSS = `
@@ -137,6 +148,13 @@ const CSS = `
 .dg-badge.bad{color:var(--dg-blocked);background:color-mix(in srgb,var(--dg-blocked) 14%,transparent)}
 .dg-badge.head{color:var(--dg-hi);background:color-mix(in srgb,var(--dg-hi) 14%,transparent)}
 .dg-push{margin-left:auto}
+.dg-node.wait{border-style:dashed;border-left-style:solid;background:color-mix(in srgb,var(--dg-st) 6%,var(--background))}
+.dg-node.wait .dg-title{-webkit-line-clamp:1;font-family:var(--font-mono,ui-monospace,monospace);font-size:11.5px}
+.dg-detail{font-size:11px;color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dg-kind{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--dg-st)}
+.dg-why{font-size:12.5px;line-height:1.5;padding:8px 10px;border-radius:8px;background:var(--accent);overflow-wrap:anywhere}
+.dg-why b{font-weight:600}
+.dg-mono{font-family:var(--font-mono,ui-monospace,monospace);font-size:12px;overflow-wrap:anywhere}
 .dg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--muted-foreground);cursor:default}
 .dg-panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:12px;
   min-width:0;overflow:auto;max-height:max(460px,calc(100vh - 250px))}
@@ -161,6 +179,8 @@ const CSS = `
 `;
 
 const stColor = (status: string) => `var(--dg-${STATUS_LABEL[status] ? status : "backlog"})`;
+/** Jobs read as work in progress; CI as review; a quiet job (log not written for a while) as a warning. */
+const waitColor = (w: Wait) => (isQuiet(w) ? "var(--dg-warn)" : w.kind === "ci" ? "var(--dg-in_review)" : "var(--dg-in_progress)");
 
 // ---------------------------------------------------------------- layout
 
@@ -181,17 +201,22 @@ function identifierNumber(t: Task | undefined): number {
 }
 
 function layoutGraph(sel: Selection, analysis: Analysis, dir: Direction): Layout {
+  const waitTask = new Map(sel.edges.filter((e) => e.kind === "wait").map((e) => [e.from, e.to]));
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: dir, nodesep: dir === "LR" ? 14 : 22, ranksep: dir === "LR" ? 52 : 44, edgesep: 10, marginx: 24, marginy: 24 });
   g.setDefaultEdgeLabel(() => ({}));
   const ids = [...sel.nodeIds].sort((a, b) => identifierNumber(analysis.get(a)?.task) - identifierNumber(analysis.get(b)?.task));
   for (const id of ids) g.setNode(id, { width: NODE_W, height: NODE_H });
+  // Wait boxes, ordered like their tasks so they sit next to them.
+  const waitIds = [...sel.waitIds].sort((a, b) =>
+    identifierNumber(analysis.get(waitTask.get(a) ?? "")?.task) - identifierNumber(analysis.get(waitTask.get(b) ?? "")?.task) || a.localeCompare(b));
+  for (const id of waitIds) g.setNode(id, { width: NODE_W, height: NODE_H });
   const edges = [...sel.edges].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "parent" ? -1 : 1));
-  for (const e of edges) if (!g.hasEdge(e.from, e.to)) g.setEdge(e.from, e.to, { weight: e.kind === "blocks" ? 2 : 1, minlen: 1 });
+  for (const e of edges) if (!g.hasEdge(e.from, e.to)) g.setEdge(e.from, e.to, { weight: e.kind === "parent" ? 1 : 2, minlen: 1 });
   dagre.layout(g);
   const graph = g.graph() as { width?: number; height?: number };
   return {
-    nodes: ids.map((id) => { const n = g.node(id) as { x: number; y: number }; return { id, x: n.x, y: n.y }; }),
+    nodes: [...ids, ...waitIds].map((id) => { const n = g.node(id) as { x: number; y: number }; return { id, x: n.x, y: n.y }; }),
     edges: edges.map((e) => ({ edge: e, key: edgeKey(e), points: ((g.edge(e.from, e.to) as { points?: Point[] } | undefined)?.points ?? []) })),
     width: graph.width ?? 0,
     height: graph.height ?? 0,
@@ -307,6 +332,8 @@ function Badges({ info }: { info: NodeInfo }) {
     <>
       {info.inCycle ? <span className="dg-badge bad" title="This task is part of a loop of tasks blocking each other">Loop</span> : null}
       {info.staleWait ? <span className="dg-badge warn" title="Still blocked, but every blocker is closed">Stale</span> : null}
+      {info.needsPerson ? <span className="dg-badge head" title="Blocked until a person acts; nothing else is running for it">Needs you</span> : null}
+      {info.unattended ? <span className="dg-badge warn" title="Blocked, but it waits on no open task, no running job, no CI and no person: nothing will wake it">No wake-up</span> : null}
       {info.isHead && !info.inCycle ? <span className="dg-badge head" title={`Open, waiting on no other task, and holding up ${plural(info.holdingUp, "open task")}`}>Holds up {info.holdingUp}</span> : null}
     </>
   );
@@ -323,6 +350,42 @@ function TaskItem({ info, onPick, note }: { info: NodeInfo; onPick: (id: string)
   );
 }
 
+function WaitDetails({ w }: { w: Wait }) {
+  const quiet = isQuiet(w);
+  return (
+    <dl className="dg-kv" style={{ marginTop: 8 }}>
+      <dt>{WAIT_KIND[w.kind]}</dt><dd className="dg-mono">{w.title}</dd>
+      {w.since ? <><dt>{w.kind === "job" ? "Running for" : "Waiting for"}</dt><dd>{since(w.since)}</dd></> : null}
+      {w.detail ? <><dt>{w.kind === "job" ? "Last line" : "Note"}</dt><dd className="dg-mono">{w.detail}</dd></> : null}
+      {w.logUpdatedAt ? <><dt>Last output</dt><dd>{ago(w.logUpdatedAt)}{quiet ? ": quiet for a while, it may be stuck" : ""}</dd></> : null}
+      {w.log ? <><dt>Log</dt><dd className="dg-mono">{w.log}</dd></> : null}
+      {w.pid ? <><dt>Process</dt><dd>{w.pid}</dd></> : null}
+    </dl>
+  );
+}
+
+/** What a blocked task waits for: its unblock note, running jobs and CI waits, and a warning when nothing is coming. */
+function WaitingFor({ info }: { info: NodeInfo }) {
+  const t = info.task;
+  const u = t.unblock;
+  if (t.status !== "blocked" && info.waits.length === 0) return null;
+  return (
+    <section>
+      <h3>Waiting for</h3>
+      {u ? <div className="dg-why"><b>{u.owner === "person" ? "You (the board)" : u.ownerName ?? "An agent"}:</b> {u.action}</div> : null}
+      {info.waits.map((w) => <WaitDetails key={w.id} w={w} />)}
+      {info.needsPerson ? <div className="dg-warnbox" style={{ marginTop: 8 }}>Nothing is running for it: it moves when you act.</div> : null}
+      {info.unattended ? (
+        <div className="dg-warnbox" style={{ marginTop: 8 }}>
+          Nothing will wake it: no open task it waits on, no running job and no CI wait. If its note talks about a job,
+          the job ended without reporting back. Check the task, then nudge its assignee.
+        </div>
+      ) : null}
+      {!u && !info.waits.length && !info.unattended && !info.needsPerson ? <p className="dg-note">Only the tasks below.</p> : null}
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------- side panel
 
 function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; visible: Set<string>; onPick: (id: string) => void }) {
@@ -331,16 +394,45 @@ function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; vis
   const heads = all.filter((i) => i.isHead && !i.inCycle).sort((a, b) => b.holdingUp - a.holdingUp).slice(0, 10);
   const loops = all.filter((i) => i.inCycle && !isClosed(i.task.status));
   const waiting = all.filter((i) => !isClosed(i.task.status) && i.openBlockers.length > 0).length;
+  const person = all.filter((i) => i.needsPerson);
+  const unattended = all.filter((i) => i.unattended);
+  const waits = all.filter((i) => !isClosed(i.task.status)).flatMap((i) => i.waits.map((w) => ({ w, info: i })));
+  const quiet = waits.filter(({ w }) => isQuiet(w));
+  const jobs = waits.filter(({ w }) => w.kind === "job").length;
   const shown = [...visible].filter((id) => !isClosed(analysis.get(id)!.task.status)).length;
   return (
     <>
       <div>
         <h2>Needs attention</h2>
         <p className="dg-note" style={{ marginTop: 4 }}>
-          {plural(waiting, "open task")} waiting on another task. {plural(shown, "open task")} in this view.
+          {plural(waiting, "open task")} waiting on another task, {plural(jobs, "background job")} running,{" "}
+          {plural(waits.length - jobs, "CI wait")}. {plural(shown, "open task")} in this view.
           Select a task to see what it waits on and what waits on it.
         </p>
       </div>
+      {person.length ? (
+        <section>
+          <h3>Waiting on you</h3>
+          <div className="dg-list">{person.map((i) => <TaskItem key={i.task.id} info={i} onPick={onPick} note={ago(i.task.updatedAt)} />)}</div>
+          <p className="dg-note">Blocked until you act, by its own note. Select one to read what it asks.</p>
+        </section>
+      ) : null}
+      <section>
+        <h3>Blocked, and nothing will wake it</h3>
+        {unattended.length === 0 ? <p className="dg-note">None.</p> : (
+          <>
+            <div className="dg-list">{unattended.map((i) => <TaskItem key={i.task.id} info={i} onPick={onPick} note={ago(i.task.updatedAt)} />)}</div>
+            <p className="dg-note">No open task it waits on, no running job, no CI wait, and its note doesn&apos;t name you. Often a background job that died. Check it, then nudge its assignee.</p>
+          </>
+        )}
+      </section>
+      {quiet.length ? (
+        <section>
+          <h3>Jobs that have gone quiet</h3>
+          <div className="dg-list">{quiet.map(({ w, info }) => <TaskItem key={w.id} info={info} onPick={onPick} note={`log ${ago(w.logUpdatedAt!)}`} />)}</div>
+          <p className="dg-note">Still running, but their log hasn&apos;t changed for 30 minutes or more. They may be stuck.</p>
+        </section>
+      ) : null}
       <section>
         <h3>Still blocked, but every blocker is closed</h3>
         {stale.length === 0 ? <p className="dg-note">None.</p> : (
@@ -401,6 +493,7 @@ function TaskPanel({ info, analysis, focused, onPick, onFocus, onClose }: {
       </div>
       {info.staleWait ? <div className="dg-warnbox">Still marked blocked, but every task it waits on is closed. Paperclip should have woken it.</div> : null}
       {info.inCycle ? <div className="dg-warnbox">Part of a loop: it waits, through other tasks, on something that waits on it.</div> : null}
+      <WaitingFor info={info} />
       <dl className="dg-kv">
         <dt>Assignee</dt><dd>{t.assigneeName ?? (t.assignedToUser ? "A board user" : <span className="dg-muted">Nobody</span>)}</dd>
         {t.priority ? <><dt>Priority</dt><dd>{t.priority}</dd></> : null}
@@ -474,7 +567,8 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
   }, []);
 
   const active = hovered ?? selected;
-  const chain = useMemo(() => (active && sel && sel.nodeIds.includes(active) ? chainOf(active, sel.edges) : null), [active, sel]);
+  const chain = useMemo(() => (active && sel && (sel.nodeIds.includes(active) || sel.waitIds.includes(active)) ? chainOf(active, sel.edges) : null), [active, sel]);
+  const waitById = useMemo(() => new Map((data?.waits ?? []).map((w) => [w.id, w])), [data]);
   const visible = useMemo(() => new Set(sel?.nodeIds ?? []), [sel]);
 
   const pick = (id: string) => {
@@ -503,7 +597,8 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
         <div>
           <h1>Dependencies</h1>
           <p className="dg-sub">
-            Which tasks wait on which. An arrow goes from a blocker to the task it blocks, so work flows {prefs.dir === "LR" ? "left to right" : "top to bottom"}.
+            Which tasks wait on which, and on what outside Paperclip: dashed boxes are running background jobs and CI waits.
+            An arrow goes from a blocker to the task it blocks, so work flows {prefs.dir === "LR" ? "left to right" : "top to bottom"}.
             Hover a task to light up its whole chain.
           </p>
         </div>
@@ -547,6 +642,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
             {statusesShown.map((s) => <span key={s}><i className="dg-sw" style={{ background: stColor(s) }} />{statusLabel(s)}</span>)}
             <span><svg width="26" height="8" aria-hidden><line x1="0" y1="4" x2="26" y2="4" stroke="var(--muted-foreground)" strokeWidth="1.5" /></svg>Blocks</span>
             <span><svg width="26" height="8" aria-hidden><line x1="0" y1="4" x2="26" y2="4" stroke="var(--muted-foreground)" strokeOpacity=".3" strokeWidth="1.5" /></svg>Blocker finished</span>
+            <span><i className="dg-sw" style={{ border: "1px dashed var(--muted-foreground)", background: "transparent" }} />Job or CI it waits on</span>
             {prefs.parentLinks ? <span><svg width="26" height="8" aria-hidden><line x1="0" y1="4" x2="26" y2="4" stroke="var(--muted-foreground)" strokeOpacity=".6" strokeDasharray="5 4" strokeWidth="1.5" /></svg>Parent of</span> : null}
           </div>
           <div className="dg-main">
@@ -558,7 +654,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
                 <div className="dg-empty">
                   <p style={{ margin: 0 }}>
                     {focusTask ? `${taskLabel(focusTask)} waits on nothing and blocks nothing.`
-                      : prefs.scope === "open" ? "No open task waits on another one right now." : "No task is linked to another yet."}
+                      : prefs.scope === "open" ? "No open task waits on another one, and nothing is blocked, right now." : "No task is linked to another yet."}
                   </p>
                   <p style={{ margin: 0, fontSize: 12 }}>Links appear when an agent or you set &ldquo;Blocked by&rdquo; on a task.</p>
                   {!focusTask && prefs.scope === "open" ? <button type="button" className="dg-btn" onClick={() => setPrefs({ scope: "all" })}>Show every chain</button> : null}
@@ -582,6 +678,32 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
                     })}
                   </svg>
                   {layout.nodes.map(({ id, x, y }) => {
+                    const w = waitById.get(id);
+                    if (w || !analysis.has(id)) {
+                      if (!w) return null; // gone since the last layout; the next one drops it
+                      const owner = analysis.get(w.taskId)?.task;
+                      const inChain = !chain || chain.up.has(id) || chain.down.has(id);
+                      const quiet = isQuiet(w);
+                      const cls = ["dg-node", "wait", inChain ? "" : "dim", selected === w.taskId ? "sel" : ""].filter(Boolean).join(" ");
+                      const label = `${WAIT_KIND[w.kind]} for ${owner ? taskLabel(owner) : "a task"}: ${w.title}`;
+                      return (
+                        <div key={id} className={cls} role="button" tabIndex={0} aria-label={label} title={w.detail ? `${w.title}\n${w.detail}` : w.title}
+                          style={{ left: x - NODE_W / 2, top: y - NODE_H / 2, width: NODE_W, height: NODE_H, ["--dg-st" as string]: waitColor(w) }}
+                          onClick={() => setSelected(w.taskId)}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(w.taskId); } }}
+                          onMouseEnter={() => setHovered(id)} onMouseLeave={() => setHovered(null)}
+                          onFocus={() => setHovered(id)} onBlur={() => setHovered(null)}>
+                          <div className="dg-top">
+                            <span className="dg-kind">{WAIT_KIND[w.kind]}</span>
+                            <span>{w.kind === "job" ? "running" : "waiting"} {since(w.since)}</span>
+                            <span className="dg-push" />
+                            {quiet ? <span className="dg-badge warn" title="Its log hasn't changed for 30 minutes or more">Quiet</span> : null}
+                          </div>
+                          <div className="dg-title">{w.title}</div>
+                          <div className="dg-detail">{w.detail ?? (w.kind === "ci" ? "Wakes the task when CI finishes" : "Wakes the task when it ends")}</div>
+                        </div>
+                      );
+                    }
                     const info = analysis.get(id)!;
                     const t = info.task;
                     const inChain = !chain || chain.up.has(id) || chain.down.has(id);
@@ -623,7 +745,8 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
           </div>
           <p className="dg-note" style={{ margin: 0 }}>
             Drag to move, scroll to zoom. Click a task for details, double-click to show only its chain. Links come from each task&apos;s
-            &ldquo;Blocked by&rdquo; list; a finished or cancelled blocker no longer holds anything up.
+            &ldquo;Blocked by&rdquo; list; a finished or cancelled blocker no longer holds anything up. Jobs are processes that will run
+            paperclip-notify for a task; CI waits come from paperclip-wait.
           </p>
         </>
       ) : null}
@@ -633,9 +756,13 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
 
 // ---------------------------------------------------------------- header button and sidebar link
 
-function useStaleCount(companyId: string | null): number {
+type Counts = { stale: number; unattended: number; person: number };
+function useCounts(companyId: string | null): Counts {
   const { data } = useGraphData(companyId, 120_000);
-  return useMemo(() => (data ? [...analyse(data).values()].filter((i) => i.staleWait).length : 0), [data]);
+  return useMemo(() => {
+    const all = data ? [...analyse(data).values()].filter((i) => !isClosed(i.task.status)) : [];
+    return { stale: all.filter((i) => i.staleWait).length, unattended: all.filter((i) => i.unattended).length, person: all.filter((i) => i.needsPerson).length };
+  }, [data]);
 }
 
 export function DependencyGraphSidebarLink(_props: PluginSidebarProps) {
@@ -651,8 +778,13 @@ export function DependencyGraphSidebarLink(_props: PluginSidebarProps) {
 
 export function DependencyGraphToolbarButton({ context }: PluginWidgetProps) {
   const nav = useHostNavigation();
-  const stale = useStaleCount(context.companyId);
-  const hint = stale ? `${plural(stale, "task")} still blocked though every blocker is closed` : "Which tasks wait on which";
+  const c = useCounts(context.companyId);
+  const stale = c.stale + c.unattended + c.person;
+  const hint = stale ? [
+    c.person ? `${plural(c.person, "task")} waiting on you` : "",
+    c.unattended ? `${plural(c.unattended, "blocked task")} nothing will wake` : "",
+    c.stale ? `${plural(c.stale, "task")} still blocked though every blocker is closed` : "",
+  ].filter(Boolean).join("; ") : "Which tasks wait on which";
   return (
     <a {...nav.linkProps(PAGE)} aria-label={`Dependencies. ${hint}`} title={hint}
       style={{

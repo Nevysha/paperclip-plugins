@@ -5,7 +5,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.1.0",
   displayName: "Dependency Graph",
-  description: "A graph of which tasks block which, with stuck chains and stale waits highlighted.",
+  description: "A graph of which tasks block which, and what blocked tasks wait on (jobs, CI, people), with stuck chains highlighted.",
   author: "Nevysha",
   categories: ["ui"],
   capabilities: [
@@ -21,6 +21,7 @@ const manifest: PaperclipPluginManifestV1 = {
     ui: "./dist/ui",
   },
   // Read-only: the plugin owns no tables and only reads tasks, their blocker links, agents and projects.
+  // Outside the database it reads /proc (running background jobs) and the watchdog's waits.json.
   database: {
     migrationsDir: "migrations",
     coreReadTables: ["issues", "issue_relations", "agents", "projects"],
