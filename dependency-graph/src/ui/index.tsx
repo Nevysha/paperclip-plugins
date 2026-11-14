@@ -43,8 +43,9 @@ function useGraphData(companyId: string | null, intervalMs: number) {
 }
 
 type Direction = "LR" | "TB";
-type Prefs = { scope: Scope; showClosed: boolean; parentLinks: boolean; dir: Direction };
-const DEFAULT_PREFS: Prefs = { scope: "open", showClosed: true, parentLinks: false, dir: "LR" };
+/** projectId: "" for all projects. */
+type Prefs = { scope: Scope; showClosed: boolean; parentLinks: boolean; dir: Direction; projectId: string };
+const DEFAULT_PREFS: Prefs = { scope: "open", showClosed: true, parentLinks: false, dir: "LR", projectId: "" };
 
 function usePrefs(): [Prefs, (p: Partial<Prefs>) => void] {
   const [prefs, setPrefs] = useState<Prefs>(() => {
@@ -437,8 +438,9 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [queryError, setQueryError] = useState<string | null>(null);
-  const [projectId, setProjectId] = useState<string>("");
 
+  // A saved project that's gone (or the only one left) shows all projects; the saved choice stays.
+  const projectId = data && data.projects.length > 1 && data.projects.some((p) => p.id === prefs.projectId) ? prefs.projectId : "";
   const focusParam = new URLSearchParams(search).get("focus");
   const analysis = useMemo(() => (data ? analyse(data) : null), [data]);
   const focusTask = useMemo(() => (data && focusParam ? findTask(data, focusParam) : null), [data, focusParam]);
@@ -528,7 +530,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
           options={[["blockers", "Blockers"], ["parents", "Blockers and parents"]]} />
         <Seg label="Direction" value={prefs.dir} onChange={(dir) => setPrefs({ dir })} options={[["LR", "Left to right"], ["TB", "Top to bottom"]]} />
         {data && data.projects.length > 1 ? (
-          <select aria-label="Project" className="dg-btn" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <select aria-label="Project" className="dg-btn" value={projectId} onChange={(e) => setPrefs({ projectId: e.target.value })}>
             <option value="">All projects</option>
             {data.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>

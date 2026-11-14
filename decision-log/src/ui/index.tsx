@@ -37,6 +37,15 @@ const FILTERS: Array<{ key: Status | "all"; label: string }> = [
   { key: "reviewed", label: "Reviewed" },
   { key: "all", label: "All" },
 ];
+const FILTER_KEY = "nevysha.decision-log.filter";
+
+/** The filter, kept in this browser across reloads (per-viewer convenience only). */
+function useFilter(): [Status | "all", (f: Status | "all") => void] {
+  const [filter, setFilter] = useState<Status | "all">(() => {
+    try { const v = localStorage.getItem(FILTER_KEY); return FILTERS.find((f) => f.key === v)?.key ?? "unreviewed"; } catch { return "unreviewed"; }
+  });
+  return [filter, (f) => { setFilter(f); try { localStorage.setItem(FILTER_KEY, f); } catch { /* storage blocked: keep it for this visit */ } }];
+}
 
 const button = (primary = false): CSSProperties => ({
   padding: "6px 12px",
@@ -132,7 +141,7 @@ function DecisionCard({
 export function DecisionLogPage({ context }: PluginPageProps) {
   const toast = usePluginToast();
   const companyId = context.companyId;
-  const [filter, setFilter] = useState<Status | "all">("unreviewed");
+  const [filter, setFilter] = useFilter();
   const [decisions, setDecisions] = useState<Decision[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
