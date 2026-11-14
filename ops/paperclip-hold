@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Hold the Paperclip fleet before a planned restart, and release it afterwards.
+
+  paperclip-hold [--grace SECONDS] [--dry-run]   hold (default grace: 120 s)
+  paperclip-hold --force-pause [--dry-run]       hold, and pause agents still running now
+  paperclip-release [--no-wake] [--dry-run]      undo a hold (same as paperclip-hold --release)
+
+Hold:
+  1. Pauses the watchdog (its `paused` flag file), unless it's already paused.
+  2. Pauses idle agents right away. Already paused or terminated agents are left alone.
+  3. For each agent with a running run on an issue, posts an interrupting board comment
+     on that issue: save your work (WIP commit + a note in the issue), then end the run.
+     The interrupt cancels the run in progress; Paperclip starts a short new run that
+     carries the message, with the agent's files still on disk.
+  4. Pauses each of those agents as soon as that save run ends, before a follow-up run
+     can loop (see the NEV-588 wake loop, 2026-11-14). Never asks agents to "wait for a go".
+  5. After the grace window, agents still running are listed and the script exits 2 with
+     the hold kept in place. Run it again to wait another window, use --force-pause to
+     pause them anyway (that cancels their run; uncommitted files stay in the worktree),
+     or paperclip-release to undo the hold.
+  Everything the hold changed is recorded in ~/.paperclip-dev/hold.json, so a rerun
+  continues the same hold and paperclip-release undoes exactly that, nothing more.
+
+Release (after the restart, on the board's go):
+  resumes the agents the hold paused, removes the watchdog flag if the hold created it,
+  and posts a plain (non-interrupting) comment on each interrupted issue so its agent
+  picks the work back up. --no-wake skips those comments.
+
+Exit codes: 0 done (quiet / released), 2 grace window over with agents still running,
+3 Paperclip unreachable, 4 nothing to release, 64 usage.
+"""
+import argparse, json, os, sys, time, urllib.error, urllib.request, uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+DATA = Path.home() / ".paperclip-dev"
+STATE = DATA / "hold.json"
+WATCHDOG_FLAG = DATA / "watchdog" / "paused"
+API = f"http://localhost:{os.environ.get('PAPERCLIP_PORT', '3100')}/api"
+POLL = 2
+NO_RUN_SEEN_AFTER = 45  # s: if the save run never shows up, treat the agent as done
+SKIP_STATUSES = {"paused", "terminated", "pending_approval"}
+
+SAVE_MESSAGE = (
+    "**Planned Paperclip restart** (from the board, via `paperclip-hold`).\n\n"
+    "Please save your work now, then end this run:\n"
+    "1. Commit your current changes on your branch as a WIP commit. Don't push unless "
+    "your task already says to.\n"
+    "2. Add a short comment in this issue: where you stopped, what's next, and anything "
+    "not tested yet.\n"
+    "3. End the run. Leave the issue status as it is.\n\n"
+    "Don't wait or poll for a go: the board pauses you as soon as this run ends and resumes "
+    "you after the restart, with a comment here."
+)
+RESUME_MESSAGE = (
+    "**Paperclip restart done** (from the board, via `paperclip-release`). "
+    "You can continue this task from where you saved it."
+)
+
+dry = False
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def say(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def api(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else None
+
+
+def items(x):
+    return x if isinstance(x, list) else (x or {}).get("items", [])
+
+
+def act(desc, method, path, body=None):
+    """A write call. In --dry-run it only says what it would do."""
+    if dry:
+        say(f"(dry run) would {desc}")
+        return {}
+    return api(method, path, body)
+
+
+def load_state():
+    return json.loads(STATE.read_text()) if STATE.exists() else None
+
+
+def save_state(st):
+    if dry:
+        return
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, indent=2) + "\n")
+    tmp.replace(STATE)
+
+
+def companies():
+    return items(api("GET", "/companies"))
+
+
+def live_runs(cid):
+    return items(api("GET", f"/companies/{cid}/live-runs"))
+
+
+def agents(cid):
+    return items(api("GET", f"/companies/{cid}/agents"))
+
+
+def finished_run_for_comment(cid, agent_id, comment_id):
+    for r in items(api("GET", f"/companies/{cid}/heartbeat-runs?limit=50")):
+        snap = r.get("contextSnapshot") or {}
+        if (r.get("agentId") == agent_id and comment_id in
+                (snap.get("wakeCommentId"), snap.get("commentId")) and r.get("finishedAt")):
+            return r
+    return None
+
+
+def pause(st, cid, agent, why):
+    act(f"pause {agent['name']} ({why})", "POST", f"/agents/{agent['id']}/pause", {})
+    st["paused"].append({"companyId": cid, "agentId": agent["id"], "name": agent["name"],
+                         "at": now(), "why": why})
+    save_state(st)
+    if not dry:
+        say(f"Paused {agent['name']} ({why}).")
+
+
+def hold(args):
+    st = load_state()
+    if st:
+        say(f"Continuing the hold started {st['startedAt']}.")
+    else:
+        st = {"startedAt": now(), "watchdogPausedByHold": False, "paused": [], "interrupted": []}
+        save_state(st)
+
+    # 1. Watchdog first, so it can't wake anything while we hold.
+    if WATCHDOG_FLAG.exists():
+        if not st["watchdogPausedByHold"]:
+            say("Watchdog already paused (not by this hold): leaving it as it is.")
+    else:
+        if dry:
+            say("(dry run) would pause the watchdog")
+        else:
+            WATCHDOG_FLAG.write_text(f"Paused by paperclip-hold at {now()}\n")
+            say("Watchdog paused.")
+        st["watchdogPausedByHold"] = True
+        save_state(st)
+
+    paused_ids = {p["agentId"] for p in st["paused"]}
+    interrupted = {i["agentId"]: i for i in st["interrupted"]}
+
+    # 2 + 3. Pause idle agents, interrupt the busy ones.
+    for c in companies():
+        cid = c["id"]
+        runs = live_runs(cid)
+        running = {}
+        for r in runs:
+            if r.get("status") == "running":
+                running.setdefault(r["agentId"], []).append(r)
+        for a in agents(cid):
+            if a["id"] in paused_ids or a.get("status") in SKIP_STATUSES:
+                continue
+            if a["id"] not in running:
+                pause(st, cid, a, "idle")
+                paused_ids.add(a["id"])
+                continue
+            if a["id"] in interrupted:
+                continue
+            issue_runs = [r for r in running[a["id"]] if r.get("issueId")]
+            if not issue_runs:
+                say(f"{a['name']} is running outside an issue (run {running[a['id']][0]['id'][:8]}): "
+                    "can't message it, waiting for that run to end.")
+                rec = {"companyId": cid, "agentId": a["id"], "name": a["name"], "issueId": None,
+                       "commentId": None, "at": now()}
+            else:
+                run = issue_runs[0]
+                res = act(f"interrupt {a['name']} on issue {run['issueId'][:8]} with the save message",
+                          "POST", f"/issues/{run['issueId']}/comments",
+                          {"clientRequestId": str(uuid.uuid4()), "body": SAVE_MESSAGE, "interrupt": True})
+                rec = {"companyId": cid, "agentId": a["id"], "name": a["name"],
+                       "issueId": run["issueId"], "commentId": (res or {}).get("id"),
+                       "interruptedRunId": run["id"], "at": now()}
+                if not dry:
+                    say(f"Asked {a['name']} to save its work (run {run['id'][:8]} interrupted).")
+            st["interrupted"].append(rec)
+            interrupted[a["id"]] = rec
+            save_state(st)
+
+    if dry:
+        if st["interrupted"]:
+            say(f"(dry run) would then wait up to {args.grace} s and pause "
+                f"{', '.join(r['name'] for r in st['interrupted'])} as each save run ends")
+        say("(dry run) nothing was changed.")
+        return 0
+
+    # 4. Pause each interrupted agent as soon as its save run ends.
+    deadline = time.time() + args.grace
+    while True:
+        waiting = []
+        for rec in st["interrupted"]:
+            if rec["agentId"] in paused_ids:
+                continue
+            cid = rec["companyId"]
+            busy = [r for r in live_runs(cid) if r["agentId"] == rec["agentId"]]
+            age = time.time() - datetime.strptime(rec["at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc).timestamp()
+            if rec["commentId"]:
+                done = finished_run_for_comment(cid, rec["agentId"], rec["commentId"]) is not None
+                # The save run never appeared (comment didn't wake it): done once idle.
+                done = done or (not busy and age > NO_RUN_SEEN_AFTER)
+            else:
+                done = not busy
+            if done:
+                # A follow-up run may already have started: pausing cancels it, which is
+                # the point (it's the loop we're avoiding).
+                pause(st, cid, {"id": rec["agentId"], "name": rec["name"]},
+                      "save run ended" if rec["commentId"] else "run ended")
+                paused_ids.add(rec["agentId"])
+            else:
+                waiting.append(rec["name"])
+        if not waiting:
+            break
+        if args.force_pause or time.time() >= deadline:
+            break
+        time.sleep(POLL)
+
+    if waiting and args.force_pause:
+        for rec in st["interrupted"]:
+            if rec["agentId"] not in paused_ids:
+                pause(st, rec["companyId"], {"id": rec["agentId"], "name": rec["name"]},
+                      "forced, run cancelled")
+                paused_ids.add(rec["agentId"])
+        waiting = []
+
+    if waiting:
+        say(f"Grace window over; still running: {', '.join(waiting)}.")
+        say("Hold kept. Next: rerun paperclip-hold to wait longer, paperclip-hold --force-pause "
+            "to pause them anyway (cancels their run), or paperclip-release to undo the hold.")
+        return 2
+
+    left = [r for c in companies() for r in live_runs(c["id"])]
+    if left and not dry:
+        say("Not quiet yet, runs still listed: " + ", ".join(
+            f"{r.get('agentName')} {r.get('status')}" for r in left) + ". Rerun paperclip-hold.")
+        return 2
+    say("Quiet: no live or queued runs. Ready for paperclip-stop / paperclip-start, "
+        "then paperclip-release on the board's go.")
+    return 0
+
+
+def release(args):
+    st = load_state()
+    if not st:
+        say("No hold to release (no ~/.paperclip-dev/hold.json).")
+        return 4
+    for p in st["paused"]:
+        try:
+            a = api("GET", f"/agents/{p['agentId']}")
+        except urllib.error.HTTPError:
+            say(f"{p['name']}: not found, skipping.")
+            continue
+        if a.get("status") != "paused":
+            say(f"{p['name']} isn't paused any more ({a.get('status')}), skipping.")
+            continue
+        act(f"resume {p['name']}", "POST", f"/agents/{p['agentId']}/resume", {})
+        if not dry:
+            say(f"Resumed {p['name']}.")
+    if st["watchdogPausedByHold"] and WATCHDOG_FLAG.exists():
+        if WATCHDOG_FLAG.read_text().startswith("Paused by paperclip-hold"):
+            if dry:
+                say("(dry run) would unpause the watchdog")
+            else:
+                WATCHDOG_FLAG.unlink()
+                say("Watchdog unpaused.")
+        else:
+            say("Watchdog was re-paused by someone else since the hold: leaving it paused.")
+    if not args.no_wake:
+        for rec in st["interrupted"]:
+            if rec.get("issueId"):
+                act(f"tell {rec['name']} to continue on issue {rec['issueId'][:8]}", "POST",
+                    f"/issues/{rec['issueId']}/comments",
+                    {"clientRequestId": str(uuid.uuid4()), "body": RESUME_MESSAGE})
+                if not dry:
+                    say(f"Told {rec['name']} to continue.")
+    if dry:
+        say("(dry run) nothing was changed.")
+        return 0
+    STATE.rename(DATA / f"hold.json.released-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    say("Hold released.")
+    return 0
+
+
+def main():
+    global dry
+    p = argparse.ArgumentParser(prog=Path(sys.argv[0]).name, description=__doc__.split("\n")[0])
+    p.add_argument("--grace", type=int, default=120, help="seconds to wait for save runs (default 120)")
+    p.add_argument("--force-pause", action="store_true", help="pause agents still running now")
+    p.add_argument("--release", action="store_true", help="undo the hold")
+    p.add_argument("--no-wake", action="store_true", help="release: don't comment on interrupted issues")
+    p.add_argument("--dry-run", action="store_true", help="say what would happen, change nothing")
+    args = p.parse_args()
+    dry = args.dry_run
+    releasing = args.release or Path(sys.argv[0]).name == "paperclip-release"
+    try:
+        return release(args) if releasing else hold(args)
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        say(f"Couldn't reach Paperclip at {API}: {e}")
+        return 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())
