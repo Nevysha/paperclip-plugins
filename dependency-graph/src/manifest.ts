@@ -12,6 +12,10 @@ const manifest: PaperclipPluginManifestV1 = {
     "api.routes.register",
     "database.namespace.migrate",
     "database.namespace.read",
+    // Only for the "Wake it" button: move a blocked task nothing will wake to To do, explain why, and wake its assignee.
+    "issue.comments.create",
+    "issues.update",
+    "issues.wakeup",
     "ui.action.register",
     "ui.page.register",
     "ui.sidebar.register",
@@ -20,7 +24,8 @@ const manifest: PaperclipPluginManifestV1 = {
     worker: "./dist/worker.js",
     ui: "./dist/ui",
   },
-  // Read-only: the plugin owns no tables and only reads tasks, their blocker links, agents and projects.
+  // The plugin owns no tables and only reads tasks, their blocker links, agents and projects. Its one write is the
+  // board's "Wake it" button (POST /tasks/:id/wake).
   // Outside the database it reads /proc (running background jobs) and the watchdog's waits.json.
   database: {
     migrationsDir: "migrations",
@@ -34,6 +39,14 @@ const manifest: PaperclipPluginManifestV1 = {
       auth: "board",
       capability: "api.routes.register",
       companyResolution: { from: "query", key: "companyId" },
+    },
+    {
+      routeKey: "wake",
+      method: "POST",
+      path: "/tasks/:id/wake",
+      auth: "board",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
     },
   ],
   ui: {

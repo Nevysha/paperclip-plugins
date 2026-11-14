@@ -51,6 +51,19 @@ export type GraphData = {
   generatedAt: string;
 };
 
+/** The comment the "Wake it" button posts on the task it wakes. */
+export function wakeComment(t: { unblockAction: string | null; stale: boolean }): string {
+  const why = t.stale
+    ? "it was still blocked although every task it waited on is closed"
+    : "it was blocked, but nothing was set to wake it: no open task it waits on, no running background job and no CI wait";
+  return [
+    `**Woken up by hand:** ${why}, so something may have gone wrong.`,
+    t.unblockAction ? `Its unblock note said: "${t.unblockAction}"` : "",
+    "Check whether what you were waiting on finished or died, then carry on, start it again, or block the task with something "
+      + "that will wake you: a blocker task, `paperclip-wait` for CI, or a background job that ends with `paperclip-notify`.",
+  ].filter(Boolean).join("\n\n");
+}
+
 export const isClosed = (status: string) => status === "done" || status === "cancelled";
 
 export type NodeInfo = {

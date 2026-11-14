@@ -13,6 +13,7 @@ import {
 } from "../graph.js";
 
 const API = "/api/plugins/nevysha.dependency-graph/api/graph";
+const WAKE_API = "/api/plugins/nevysha.dependency-graph/api/tasks";
 const PREFS_KEY = "nevysha.dependency-graph.prefs";
 const PAGE = "/dependencies";
 
@@ -39,7 +40,8 @@ function useGraphData(companyId: string | null, intervalMs: number) {
       .catch((err: Error) => { if (live) setError(err.message); });
     return () => { live = false; };
   }, [companyId, tick]);
-  return { data, error };
+  const reload = useCallback(() => setTick((n) => n + 1), []);
+  return { data, error, reload };
 }
 
 type Direction = "LR" | "TB";
@@ -351,6 +353,47 @@ function TaskItem({ info, onPick, note }: { info: NodeInfo; onPick: (id: string)
   );
 }
 
+/** For a blocked task nothing will wake (or a stale one): move it to To do, explain why on it, and wake its assignee. */
+function WakeButton({ info, companyId, onDone }: { info: NodeInfo; companyId: string; onDone: () => void }) {
+  const [state, setState] = useState<"idle" | "confirm" | "busy">("idle");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => { setState("idle"); setMsg(null); }, [info.task.id]);
+  if (!info.task.assigneeName) return <p className="dg-note" style={{ marginTop: 6 }}>No agent is assigned to it, so there&apos;s nobody to wake.</p>;
+  const wake = async () => {
+    setState("busy");
+    try {
+      const res = await fetch(`${WAKE_API}/${info.task.id}/wake`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ companyId }),
+      });
+      const json = await res.json().catch(() => null) as { error?: string; queued?: boolean } | null;
+      if (!res.ok) throw new Error(json?.error ?? `Request failed (${res.status})`);
+      setMsg({ ok: true, text: json?.queued
+        ? `Moved to To do and woke ${info.task.assigneeName}. A comment on the task says why.`
+        : `Moved to To do with a comment saying why. ${info.task.assigneeName} already had a run queued.` });
+      onDone();
+    } catch (err) {
+      setMsg({ ok: false, text: (err as Error).message });
+    }
+    setState("idle");
+  };
+  if (msg) return <p className={msg.ok ? "dg-note" : "dg-err"} style={{ marginTop: 6, fontSize: 12.5 }} role="status">{msg.text}</p>;
+  return state === "confirm" ? (
+    <div style={{ marginTop: 8 }}>
+      <p className="dg-note">This moves it to To do, posts a comment explaining it was woken, and starts a run for {info.task.assigneeName}.</p>
+      <div className="dg-row" style={{ marginTop: 6 }}>
+        <button type="button" className="dg-btn" onClick={wake}>Yes, wake it</button>
+        <button type="button" className="dg-btn" onClick={() => setState("idle")}>Cancel</button>
+      </div>
+    </div>
+  ) : (
+    <div className="dg-row" style={{ marginTop: 8 }}>
+      <button type="button" className="dg-btn" disabled={state === "busy"} onClick={() => setState("confirm")}>
+        {state === "busy" ? "Waking…" : `Wake it (${info.task.assigneeName})`}
+      </button>
+    </div>
+  );
+}
+
 function WaitDetails({ w }: { w: Wait }) {
   const quiet = isQuiet(w);
   return (
@@ -366,7 +409,7 @@ function WaitDetails({ w }: { w: Wait }) {
 }
 
 /** What a blocked task waits for: its unblock note, running jobs and CI waits, and a warning when nothing is coming. */
-function WaitingFor({ info }: { info: NodeInfo }) {
+function WaitingFor({ info, companyId, onChanged }: { info: NodeInfo; companyId: string; onChanged: () => void }) {
   const t = info.task;
   const u = t.unblock;
   if (t.status !== "blocked" && info.waits.length === 0) return null;
@@ -379,7 +422,8 @@ function WaitingFor({ info }: { info: NodeInfo }) {
       {info.unattended ? (
         <div className="dg-warnbox" style={{ marginTop: 8 }}>
           Nothing will wake it: no open task it waits on, no running job and no CI wait. If its note talks about a job,
-          the job ended without reporting back. Check the task, then nudge its assignee.
+          the job ended without reporting back. Check the task, then wake it.
+          <WakeButton info={info} companyId={companyId} onDone={onChanged} />
         </div>
       ) : null}
       {!u && !info.waits.length && !info.unattended && !info.needsPerson ? <p className="dg-note">Only the tasks below.</p> : null}
@@ -423,7 +467,7 @@ function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; vis
         {unattended.length === 0 ? <p className="dg-note">None.</p> : (
           <>
             <div className="dg-list">{unattended.map((i) => <TaskItem key={i.task.id} info={i} onPick={onPick} note={ago(i.task.updatedAt)} />)}</div>
-            <p className="dg-note">No open task it waits on, no running job, no CI wait, and its note doesn&apos;t name you. Often a background job that died. Check it, then nudge its assignee.</p>
+            <p className="dg-note">No open task it waits on, no running job, no CI wait, and its note doesn&apos;t name you. Often a background job that died. Select one to read its note and wake it.</p>
           </>
         )}
       </section>
@@ -463,8 +507,8 @@ function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; vis
   );
 }
 
-function TaskPanel({ info, analysis, focused, onPick, onFocus, onClose }: {
-  info: NodeInfo; analysis: Analysis; focused: boolean;
+function TaskPanel({ info, analysis, focused, companyId, onChanged, onPick, onFocus, onClose }: {
+  info: NodeInfo; analysis: Analysis; focused: boolean; companyId: string; onChanged: () => void;
   onPick: (id: string) => void; onFocus: (id: string | null) => void; onClose: () => void;
 }) {
   const nav = useHostNavigation();
@@ -492,9 +536,14 @@ function TaskPanel({ info, analysis, focused, onPick, onFocus, onClose }: {
           ? <button type="button" className="dg-btn" onClick={() => onFocus(null)}>Show all chains</button>
           : <button type="button" className="dg-btn" onClick={() => onFocus(t.id)}>Show only this chain</button>}
       </div>
-      {info.staleWait ? <div className="dg-warnbox">Still marked blocked, but every task it waits on is closed. Paperclip should have woken it.</div> : null}
+      {info.staleWait && !isClosed(t.status) ? (
+        <div className="dg-warnbox">
+          Still marked blocked, but every task it waits on is closed. Paperclip should have woken it.
+          {info.waits.length === 0 ? <WakeButton info={info} companyId={companyId} onDone={onChanged} /> : null}
+        </div>
+      ) : null}
       {info.inCycle ? <div className="dg-warnbox">Part of a loop: it waits, through other tasks, on something that waits on it.</div> : null}
-      <WaitingFor info={info} />
+      <WaitingFor info={info} companyId={companyId} onChanged={onChanged} />
       <dl className="dg-kv">
         <dt>Assignee</dt><dd>{t.assigneeName ?? (t.assignedToUser ? "A board user" : <span className="dg-muted">Nobody</span>)}</dd>
         {t.priority ? <><dt>Priority</dt><dd>{t.priority}</dd></> : null}
@@ -526,7 +575,7 @@ function TaskPanel({ info, analysis, focused, onPick, onFocus, onClose }: {
 export function DependencyGraphPage({ context }: PluginPageProps) {
   const { search } = useHostLocation();
   const nav = useHostNavigation();
-  const { data, error } = useGraphData(context.companyId, 30_000);
+  const { data, error, reload } = useGraphData(context.companyId, 30_000);
   const [prefs, setPrefs] = usePrefs();
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -740,6 +789,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
             <aside className="dg-panel" aria-label={selectedInfo ? "Task details" : "Needs attention"}>
               {selectedInfo
                 ? <TaskPanel info={selectedInfo} analysis={analysis} focused={focusTask?.id === selectedInfo.task.id}
+                    companyId={context.companyId ?? ""} onChanged={reload}
                     onPick={pick} onFocus={setFocus} onClose={() => setSelected(null)} />
                 : <AttentionPanel analysis={analysis} visible={visible} onPick={pick} />}
             </aside>

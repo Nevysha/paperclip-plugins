@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import manifest from "../src/manifest.js";
-import { analyse, chainOf, findTask, isQuiet, select, type GraphData, type Relation, type SelectOptions, type Task, type Wait } from "../src/graph.js";
+import { analyse, chainOf, findTask, isQuiet, wakeComment, select, type GraphData, type Relation, type SelectOptions, type Task, type Wait } from "../src/graph.js";
 
 const task = (n: number, status = "todo", over: Partial<Task> = {}): Task => ({
   id: `t${n}`, identifier: `NEV-${n}`, title: `Task ${n}`, status, priority: "medium", parentId: null,
@@ -13,8 +13,9 @@ const opts = (over: Partial<SelectOptions> = {}): SelectOptions => ({
 });
 
 describe("manifest", () => {
-  it("only reads, and only for the board", () => {
-    expect(manifest.apiRoutes?.every((r) => r.auth === "board" && r.method === "GET")).toBe(true);
+  it("only reads, except the board's wake button", () => {
+    expect(manifest.apiRoutes?.every((r) => r.auth === "board")).toBe(true);
+    expect(manifest.apiRoutes?.filter((r) => r.method !== "GET").map((r) => r.routeKey)).toEqual(["wake"]);
     expect(manifest.capabilities).not.toContain("database.namespace.write");
     expect(manifest.database?.coreReadTables).toContain("issue_relations");
   });
@@ -183,5 +184,18 @@ describe("waits", () => {
     expect(isQuiet(job(1, { logUpdatedAt: "2026-11-14T09:45:00Z" }), now)).toBe(false);
     expect(isQuiet(job(1, { logUpdatedAt: "2026-11-14T09:00:00Z" }), now)).toBe(true);
     expect(isQuiet(job(1, { logUpdatedAt: null }), now)).toBe(false);
+  });
+});
+
+describe("wakeComment", () => {
+  it("says why the task was woken, quotes its note, and how to block it properly", () => {
+    const c = wakeComment({ unblockAction: "The run finishes", stale: false });
+    expect(c).toContain("nothing was set to wake it");
+    expect(c).toContain("something may have gone wrong");
+    expect(c).not.toMatch(/dependencies/i);
+    expect(c).toContain('"The run finishes"');
+    expect(c).toContain("paperclip-notify");
+    expect(wakeComment({ unblockAction: null, stale: true })).toContain("every task it waited on is closed, so something may have gone wrong");
+    expect(wakeComment({ unblockAction: null, stale: true })).not.toContain("unblock note");
   });
 });
