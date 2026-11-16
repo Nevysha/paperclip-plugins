@@ -34,6 +34,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findWakeLoops } from "./wake-loops.mjs";
+import { ciResultAlreadySeen, blockersWakeAlreadyDelivered } from "./dedupe.mjs";
 
 const HOME = homedir();
 const API = "http://localhost:3100/api";
@@ -362,6 +363,8 @@ async function main() {
       const deps = d.blockedBy ?? [];
       let why = null;
       if (deps.length && !openDeps(d).length) {
+        // Paperclip already woke the agent for this and it chose to stay blocked: don't repeat it.
+        if (blockersWakeAlreadyDelivered(runs, d.id)) continue;
         why = `everything this was waiting on is finished (${deps.map((b) => b.identifier).join(", ")})`;
       } else if (!deps.length) {
         const issueRuns = list(await api("GET", `/issues/${d.id}/runs`), "runs");
@@ -397,7 +400,7 @@ async function main() {
   }
 
   // 5. CI results -> comments on the waiting task
-  await checkCi({ gate, detailed, liveIssueIds, issues });
+  await checkCi({ gate, detailed, liveIssueIds, issues, runs });
 
   // 6. Tasks marked "Sized: one run" get the Sliced label (agents' create_task can't set labels).
   // Only the label changes, so this runs even while the usage gate is closed.
@@ -516,7 +519,7 @@ function staleReason(repo, run) {
   }
 }
 
-async function checkCi({ gate, detailed, liveIssueIds, issues }) {
+async function checkCi({ gate, detailed, liveIssueIds, issues, runs }) {
   const byIdent = new Map(issues.map((i) => [i.identifier, i]));
   const runsByRepo = new Map();
   for (const repo of REPOS) {
@@ -564,6 +567,12 @@ async function checkCi({ gate, detailed, liveIssueIds, issues }) {
       let delivered = true;
       for (const id of targets) {
         if (liveIssueIds.has(id)) { delivered = false; continue; } // a live run would swallow the wake; retry next tick
+        // The agent was running when CI finished (it waited for it) or has run since: it knows.
+        // Registered waits (paperclip-wait) are still always delivered, by checkWaits.
+        if (ciResultAlreadySeen(runs, id, run.updatedAt)) {
+          log("debug", `CI ${key} not posted on ${detailed.get(id).identifier}: its agent already saw the result`);
+          continue;
+        }
         await deliverCi(detailed.get(id), run);
       }
       if (delivered) { state.ciSeen[key] = now; delete state.ciPending[key]; } else state.ciPending[key] ??= now;
