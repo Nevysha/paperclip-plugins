@@ -11,7 +11,7 @@ const COMPANY_ID = "f305d1c7-0061-4a97-90b4-73783025f4cc";
 const PROJECT_ID = "ee5c6459-1d20-4dcf-b92b-f7d8b0bfe7c4";
 const ASSIGNEES: Record<string, string> = {
   "po-review": "54511d0a-2ede-4a78-ba2b-ab0e8dfc07e6",
-  "safety-review": "5d3fc5ab-4d76-4b23-aca2-ede30c8e9611", // the Reviewer (was the DevOps Engineer until 2026-11-16)
+  "safety-review": "b9860e4a-e2a5-4837-a1b2-155a72b7957e", // the Reviewer (the former DevOps Engineer, renamed 2026-11-16)
 };
 const SETTINGS_KEY = { scopeKind: "instance" as const, stateKey: "gate-settings" };
 const USAGE_FILE = process.env.CLAUDE_USAGE_FILE?.trim() || join(homedir(), ".paperclip-dev", "claude-usage.json");
