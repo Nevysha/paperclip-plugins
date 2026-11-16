@@ -6,10 +6,10 @@ The watchdog itself isn't part of the plugin. It's a systemd user timer that run
 - renews the paperclip user's Claude login (`~/.claude/.credentials.json`) with `claude auth status` when it has less than 15 minutes left. The claude-usage plugin reads that login but never renews it, and the usage limits below need fresh usage data. Agents don't use this login: each run gets its own token;
 - restarts Paperclip when a company-wide quarantine stops every agent run;
 - recreates tasks Paperclip won't restart;
-- moves stalled `blocked` tasks back to `todo`;
+- moves stalled `blocked` tasks back to `todo`, except when Paperclip already woke the agent because the task's blockers finished and the agent chose to stay blocked;
 - wakes idle `todo` tasks;
 - adds the **Sliced** label to open tasks whose description starts with `Sized: one run`, since agents can't set labels themselves;
-- comments CI results on the tasks waiting for them. It skips results nobody can act on: a commit a newer push replaced, a deleted branch, or a pull request that's already merged or closed. Waits registered with `paperclip-wait` are always delivered. space-4x's CI is read from the host's Forgejo, with the read-only token in `~/.config/space4x/forgejo-tools-token` (account `paperclip-tools`); other repos' from GitHub Actions with `gh`;
+- comments CI results on the tasks waiting for them. It skips results nobody can act on: a commit a newer push replaced, a deleted branch, or a pull request that's already merged or closed. Waits registered with `paperclip-wait` are always delivered. Other results aren't posted when the task's agent already saw them: it was running when CI finished (for example waiting with `scripts/forge ci wait`) or has run since, because each comment wakes a run that resumes the task's whole session; space-4x's CI is read from the host's Forgejo, with the read-only token in `~/.config/space4x/forgejo-tools-token` (account `paperclip-tools`); other repos' from GitHub Actions with `gh`;
 - notes when Forgejo's mirror of space-4x's `main` on GitHub has differed from Forgejo for over 15 minutes.
 
 The steps that start agent runs pause while Claude usage is at or over the limits in `~/.paperclip-dev/claude-usage.json`: `gate.pauseAtPercent` for the 5-hour session and `gate.weekPauseAtPercent` for the week. When the session limit resets, the watchdog forgets its per-task cooldowns once, so tasks that stalled on the limit are picked up on the next run instead of hours later.
