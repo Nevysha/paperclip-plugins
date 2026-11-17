@@ -126,7 +126,11 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
           {r.status === "paused" ? <span style={muted}>{r.pausedByGate ? "Paused by usage" : "Paused"}</span> : null}
         </label>
       ))}
-      <div style={muted}>Checked routines pause when 5-hour or weekly usage reaches its limit, and resume when it drops. The watchdog uses the same limits.</div>
+      <div style={muted}>
+        {gate.routines.length
+          ? "Checked routines pause when 5-hour or weekly usage reaches its limit, and resume when it drops. The watchdog uses the same limits."
+          : "No routines are set up for this company. Add them in the plugin settings."}
+      </div>
     </div>
   );
 }

@@ -56,7 +56,6 @@ export function parseCredentials(raw: string, now = Date.now()): string | null {
 export interface PublishedGate {
   pauseAtPercent: number;
   weekPauseAtPercent: number;
-  routines: Record<string, boolean>;
 }
 
 /** What other local readers get. Percentages, times and gate settings only, so it's safe to leave readable. */

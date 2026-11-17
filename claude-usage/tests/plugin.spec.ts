@@ -1,11 +1,79 @@
 import { describe, expect, it } from "vitest";
-import { ROUTINES, decide, isOverLimit } from "../src/gate.js";
+import { DEFAULT_FLAGS, ROUTINES, decide, isOverLimit, parseGateConfig, takeLegacyFlags, toFlags, toRelease } from "../src/gate.js";
 import manifest from "../src/manifest.js";
 import { parseCredentials, toUsageFile, toWindows } from "../src/usage.js";
 
 describe("manifest", () => {
   it("declares a routine for each configurable key", () => {
     expect(manifest.routines?.map((r: { routineKey: string }) => r.routineKey)).toEqual(ROUTINES.map((r) => r.key));
+  });
+});
+
+describe("manifest config", () => {
+  it("offers only the declared routine keys", () => {
+    const schema = manifest.instanceConfigSchema as { properties: { routines: { items: { properties: { key: { enum: string[] } } } } } };
+    expect(schema.properties.routines.items.properties.key.enum).toEqual(ROUTINES.map((r) => r.key));
+  });
+});
+
+describe("parseGateConfig", () => {
+  it("manages nothing without config", () => {
+    expect(parseGateConfig(undefined)).toEqual({ projectId: null, routines: [] });
+    expect(parseGateConfig({})).toEqual({ projectId: null, routines: [] });
+    expect(parseGateConfig({ routines: "po-review" })).toEqual({ projectId: null, routines: [] });
+  });
+  it("keeps configured routines with an assignee, trimmed", () => {
+    expect(parseGateConfig({ projectId: " p1 ", routines: [{ key: "safety-review", assigneeAgentId: " a1 " }] }))
+      .toEqual({ projectId: "p1", routines: [{ key: "safety-review", assigneeAgentId: "a1" }] });
+  });
+  it("drops unknown keys, blank assignees and duplicates", () => {
+    const config = parseGateConfig({
+      projectId: "  ",
+      routines: [
+        { key: "nope", assigneeAgentId: "a1" },
+        { key: "po-review", assigneeAgentId: "" },
+        { key: "po-review" },
+        null,
+        { key: "safety-review", assigneeAgentId: "a2" },
+        { key: "safety-review", assigneeAgentId: "a3" },
+      ],
+    });
+    expect(config).toEqual({ projectId: null, routines: [{ key: "safety-review", assigneeAgentId: "a2" }] });
+  });
+});
+
+describe("toFlags", () => {
+  it("merges saved flags over the defaults", () => {
+    const flags = toFlags({ enabled: { "safety-review": true }, pausedByGate: { "po-review": true } });
+    expect(flags.enabled).toEqual({ ...DEFAULT_FLAGS.enabled, "safety-review": true });
+    expect(flags.pausedByGate).toEqual({ "po-review": true });
+  });
+  it("starts from the defaults when nothing is saved", () => {
+    expect(toFlags(null)).toEqual(DEFAULT_FLAGS);
+    expect(toFlags("nope")).toEqual(DEFAULT_FLAGS);
+  });
+});
+
+describe("takeLegacyFlags", () => {
+  it("splits the old routine flags from the limits", () => {
+    const { flags, rest } = takeLegacyFlags({ pauseAtPercent: 80, weekPauseAtPercent: 95, enabled: { "safety-review": true }, pausedByGate: { "po-review": true } });
+    expect(flags).toEqual({ enabled: { ...DEFAULT_FLAGS.enabled, "safety-review": true }, pausedByGate: { "po-review": true } });
+    expect(rest).toEqual({ pauseAtPercent: 80, weekPauseAtPercent: 95 });
+  });
+  it("finds nothing to take once the flags are gone", () => {
+    expect(takeLegacyFlags({ pauseAtPercent: 80 })).toEqual({ flags: null, rest: { pauseAtPercent: 80 } });
+    expect(takeLegacyFlags(null)).toEqual({ flags: null, rest: {} });
+  });
+});
+
+describe("toRelease", () => {
+  it("lets go of routines the gate paused that the company no longer lists", () => {
+    expect(toRelease({ "po-review": true, "safety-review": true }, ["safety-review"])).toEqual(["po-review"]);
+  });
+  it("keeps listed routines and ignores ones the gate didn't pause", () => {
+    expect(toRelease({ "po-review": false, "safety-review": true }, ["safety-review"])).toEqual([]);
+    expect(toRelease({ "po-review": false }, [])).toEqual([]);
+    expect(toRelease({ unknown: true }, [])).toEqual([]);
   });
 });
 
