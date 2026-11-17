@@ -18,15 +18,16 @@ Every 5 minutes it also writes `~/.paperclip-dev/claude-usage.json` (or `CLAUDE_
 The panel has two usage limits, one for the 5-hour session and one for the week, and a list of routines. Every 5 minutes, checked routines pause when either window reaches its limit, and resume when it drops. The weekly limit defaults to the session one until you set it. Both are published in `~/.paperclip-dev/claude-usage.json` (`gate.pauseAtPercent`, `gate.weekPauseAtPercent`), and the watchdog uses them too. This runs in the plugin, so it uses no Claude usage.
 
 - A plugin can only pause routines it owns, so the routines are declared in the plugin itself, from `setup.json` (see below). New routines are created on the next check after a rebuild.
+- Each company picks which of these routines it runs, with which assignee and project, in the plugin settings (see below). The plugin re-applies the assignee and project on every check.
+- The limits are shared by the whole instance. Which routines are checked is saved per company.
 - A routine you paused by hand stays paused. If you resume one while usage is over the limit, the next check pauses it again.
 - If usage can't be read, routines the plugin paused resume, so a broken login can't silently stop them.
 - It only stops new scheduled runs, not work already running.
 - If you uninstall the plugin, its routines stay as they are, including any that are paused.
-- Unattended checks need a config row for the company, or Paperclip denies them with "company context is required". After a reinstall, set it with `POST /api/plugins/nevysha.claude-usage/config` and `{"companyId":"...","configJson":{}}`.
 
 ## Setup
 
-The routines, and the company, project and agents they belong to, come from `setup.json` in this folder. It isn't committed: copy `setup.example.json` and fill it in. Without it the plugin still shows usage, with no routines to pause. The build turns it into `src/setup.generated.ts`, so rebuild after a change.
+The routines come from `setup.json` in this folder. It isn't committed: copy `setup.example.json` and fill it in. Without it the plugin still shows usage, with no routines to pause. The build turns it into `src/setup.generated.ts`, so rebuild after a change.
 
 ```json
 {
@@ -48,6 +49,50 @@ The routines, and the company, project and agents they belong to, come from `set
 ```
 
 `key` is how Paperclip tracks a routine: changing it creates a new one. `defaultEnabled` is whether the limit pauses it until someone changes its checkbox.
+
+`companyId`, `projectId` and each `assigneeAgentId` are the defaults for that one company. Leave them empty if every company sets its own in the plugin settings.
+
+## Settings
+
+Set them per company in the plugin settings, or with `POST /api/plugins/nevysha.claude-usage/config` and `{"companyId":"...","configJson":{...}}`. A change takes effect on the next check, without a rebuild.
+
+| Setting | Default | Use |
+| --- | --- | --- |
+| `projectId` | `projectId` from `setup.json` for the `setup.json` company, else none | The project the managed routines file their tasks in |
+| `routines` | every routine with its `assigneeAgentId` for the `setup.json` company, else `[]` | A list of `{"key": "...", "assigneeAgentId": "..."}`; `key` is one of the keys in `setup.json` |
+
+For example:
+
+```json
+{
+  "projectId": "<project id>",
+  "routines": [
+    { "key": "weekly-review", "assigneeAgentId": "<agent id>" }
+  ]
+}
+```
+
+Set `"routines": []` to stop the `setup.json` company's routines through the settings.
+
+The plugin runs its checks for every company, so it needs the `companies.read` capability.
+Unattended checks need a config row for the company, or Paperclip denies them with "company context is required". A company without one is skipped. After a reinstall, set it with `POST /api/plugins/nevysha.claude-usage/config` and `{"companyId":"...","configJson":{}}`.
+
+When a company's settings stop listing a routine that the plugin paused, the next check resumes it and stops managing it.
+
+## Upgrading
+
+### From 0.3
+
+Version 0.4.0 adds the `companies.read` capability. Paperclip does not upgrade a plugin in place when it asks for a new capability, so the upgrade fails. Uninstall the plugin without a purge, then install it again:
+
+```sh
+paperclipai plugin uninstall nevysha.claude-usage
+paperclipai plugin install ./claude-usage
+```
+
+Do not purge: do not use `paperclipai plugin uninstall --force` or `?purge=true` on the API. A purge deletes the plugin's state, its config and its managed routines. Routines the gate had paused then stay paused, and the next install creates duplicates of them.
+
+Before 0.4.0 the checkboxes were saved for the whole instance. The first company with routines takes over the saved checkboxes, so routines the gate had paused resume when usage drops. With a `setup.json` company, that is the `setup.json` company, and it needs no new settings.
 
 ## Development
 
