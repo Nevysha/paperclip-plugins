@@ -215,3 +215,23 @@ export function matchCommits(commits, runEvidence) {
     return { sha: c.sha, runId: null, method: "none" };
   });
 }
+
+/** TOKEN_LENS_REPOS as a list: comma-separated, blanks dropped. */
+export function parseRepos(value) {
+  return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** True for one run of visible ASCII, the only text that is safe in a bearer header. */
+export function isHeaderSafeToken(value) {
+  return typeof value === "string" && /^[\x21-\x7e]+$/.test(value);
+}
+
+/** The ingest POST, with the API key in a bearer header. */
+export function ingestRequest(api, plugin, companyId, body, apiKey) {
+  const headers = { "content-type": "application/json" };
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+  return {
+    url: `${api.replace(/\/+$/, "")}/api/plugins/${plugin}/api/ingest?companyId=${encodeURIComponent(companyId)}`,
+    init: { method: "POST", headers, body: JSON.stringify(body) },
+  };
+}

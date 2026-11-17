@@ -50,6 +50,20 @@ Paperclip doesn't let a plugin read run events (where tool calls are) or call lo
 1. reads finished runs' tool and usage events from Postgres and posts per-run summaries to the plugin's `POST /ingest` route;
 2. lists merged PRs (space-4x from the host's Forgejo, with the read-only token in `~/.config/space4x/forgejo-tools-token`; repos still on GitHub with `gh` and the agents' limited token, `GH_CONFIG_DIR=~/.config/space4x/gh`; set the list with `TOKEN_LENS_REPOS`, where `forgejo:owner/name` means Forgejo), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
 
+Its settings are environment variables, all optional:
+
+| Variable | Default | Use |
+| --- | --- | --- |
+| `TOKEN_LENS_DB` | `postgres://paperclip:paperclip@127.0.0.1:54329/paperclip` | Paperclip's Postgres |
+| `TOKEN_LENS_API` | `http://localhost:3100` | Paperclip's URL |
+| `TOKEN_LENS_API_KEY_FILE` | unset | A file holding a board API key. Set it when the instance runs in `authenticated` mode; the key is sent as a bearer header. Unset sends no key. |
+| `TOKEN_LENS_REPOS` | `forgejo:nevysha/space-4x` | Comma-separated repos; `forgejo:owner/name` means Forgejo, `owner/name` means GitHub |
+| `FORGE_URL` | `http://localhost:3300` | The Forgejo for `forgejo:` repos |
+| `TOKEN_LENS_FORGE_TOKEN_FILE` | `~/.config/space4x/forgejo-tools-token` | A file holding the read-only Forgejo token |
+| `GH_CONFIG_DIR` | gh's own default (the unit sets `~/.config/space4x/gh`) | The `gh` login for GitHub repos |
+
+The systemd unit also reads `~/.config/token-lens/env` when it exists, so another host can set these without editing the unit.
+
 It does nothing when Paperclip isn't answering and never starts it. Its timer doesn't start at boot either: `paperclip-start` (in [`ops/`](../ops/)) starts it, with a first pass 2 minutes later, and `paperclip-stop` stops it. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
 
 ```sh

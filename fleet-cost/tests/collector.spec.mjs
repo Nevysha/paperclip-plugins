@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attributeRun, commitHashesIn, commitSubjects, mainCommand, matchCommits, summarizeNumstat, toolCategory } from "../collector/lib.mjs";
+import { attributeRun, commitHashesIn, commitSubjects, ingestRequest, isHeaderSafeToken, mainCommand, matchCommits, parseRepos, summarizeNumstat, toolCategory } from "../collector/lib.mjs";
 
 describe("toolCategory", () => {
   it("splits Bash by the command that matters", () => {
@@ -70,5 +70,33 @@ describe("commits", () => {
   it("splits numstat into code and docs, skipping lockfiles and binaries", () => {
     expect(summarizeNumstat(["10\t2\tsrc/a.ts", "5\t1\tdocs/b.md", "900\t0\tpackage-lock.json", "-\t-\timg.png", "junk"]))
       .toEqual({ codeAdded: 10, codeDeleted: 2, docAdded: 5, docDeleted: 1, codeFiles: 1, docFiles: 1, skippedFiles: 2 });
+  });
+});
+
+describe("parseRepos", () => {
+  it("reads a comma list and drops blanks", () => {
+    expect(parseRepos(undefined)).toEqual([]);
+    expect(parseRepos(" , ")).toEqual([]);
+    expect(parseRepos("acme/a, forgejo:acme/b ,acme/c")).toEqual(["acme/a", "forgejo:acme/b", "acme/c"]);
+  });
+});
+
+describe("ingestRequest", () => {
+  it("sends the key as a bearer header only", () => {
+    const { url, init } = ingestRequest("http://h:3200/", "p.x", "c 1", { runs: [] }, "k-123");
+    expect(url).toBe("http://h:3200/api/plugins/p.x/api/ingest?companyId=c%201");
+    expect(url).not.toContain("k-123");
+    expect(init.headers).toEqual({ "content-type": "application/json", authorization: "Bearer k-123" });
+    expect(JSON.parse(init.body)).toEqual({ runs: [] });
+  });
+  it("sends no auth header without a key", () => {
+    expect(ingestRequest("http://h", "p", "c", {}, null).init.headers).toEqual({ "content-type": "application/json" });
+  });
+});
+
+describe("isHeaderSafeToken", () => {
+  it("accepts one visible token and rejects whitespace, control characters and empties", () => {
+    expect(isHeaderSafeToken("pcp_board_AbC-123.x")).toBe(true);
+    for (const bad of ["", "a b", "a\nb", "a\rb", "a\tb", "é", null]) expect(isHeaderSafeToken(bad)).toBe(false);
   });
 });

@@ -7,6 +7,8 @@ Type=oneshot
 # Does nothing when Paperclip isn't answering; it never starts Paperclip.
 # GH_CONFIG_DIR: the agents' limited GitHub token, never the founder's login.
 Environment=GH_CONFIG_DIR=%h/.config/space4x/gh
+# Optional overrides for the collector's environment variables, one VAR=value per line.
+EnvironmentFile=-%h/.config/token-lens/env
 ExecStart=/bin/bash -c 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null; cd "$HOME/projects/paperclip-plugins/fleet-cost" && exec node collector/collect.mjs'
 TimeoutStartSec=900
 Nice=10
