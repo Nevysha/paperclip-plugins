@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Each agent session folder gets its own pnpm and Claude CLI cache (~150 MB), and Paperclip never
+# removes them: about 200 new folders a day filled the host disk on 2026-11-18. The rest of each
+# folder (session state, notes) is small and is kept.
+# Delete cache/ in Paperclip agent session folders where no file changed in the last 24 h.
+# Usage: acpx-cache-clean [--dry-run]. Run as the paperclip user.
+set -euo pipefail
+root=/home/paperclip/.paperclip-dev/instances/default/runtime/paperclip-runner/acpx/acpx
+dry=${1:-}
+n=0; kb=0
+for d in "$root"/*/; do
+  [[ -d "$d/cache" ]] || continue
+  # anything touched in the last 24 h (1440 min) anywhere in the folder => in use, skip
+  if [[ -n "$(find "$d" -xdev -mmin -1440 -print -quit 2>/dev/null)" ]]; then continue; fi
+  s=$(du -xs "$d/cache" 2>/dev/null | cut -f1 || true); s=${s:-0}
+  n=$((n+1)); kb=$((kb+s))
+  [[ "$dry" == "--dry-run" ]] || rm -rf --one-file-system "$d/cache" 2>/dev/null || true
+done
+echo "$([[ "$dry" == "--dry-run" ]] && echo would\ free || echo freed): $((kb/1048576)) GB in $n session folders"

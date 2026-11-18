@@ -27,7 +27,7 @@ LOG="$DATA/logs/paperclip.log"
 HEALTH="http://localhost:$PORT/api/health"
 WAIT_SECONDS=300
 
-TIMERS=(paperclip-watchdog.timer token-lens-collect.timer)
+TIMERS=(paperclip-watchdog.timer token-lens-collect.timer acpx-cache-clean.timer)
 timers_on() {
   local t
   for t in "${TIMERS[@]}"; do
@@ -97,6 +97,9 @@ else
          PAPERCLIP_CONTEXT="$DATA/context.json"
          PAPERCLIP_MIGRATION_PROMPT=never
          PAPERCLIP_MIGRATION_AUTO_APPLY=false
+         # A database backup every 6 hours instead of every hour (default 60 min). Paperclip keeps
+         # every backup for 7 days; hourly dumps of ~270 MB filled the disk on 2026-11-18.
+         PAPERCLIP_DB_BACKUP_INTERVAL_MINUTES=360
          # Caddy on the tailnet IP proxies both names to localhost:3100:
          # https://paperclip.tailb0dfdd.ts.net (Tailscale cert) and
          # https://paperclip.local.nevysha.dev (wildcard Let's Encrypt cert, tailnet-only DNS target)
