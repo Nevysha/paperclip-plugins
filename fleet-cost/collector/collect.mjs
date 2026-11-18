@@ -18,17 +18,28 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import postgres from "postgres";
-import { attributeRun, commitHashesIn, commitSubjects, matchCommits, summarizeNumstat } from "./lib.mjs";
+import { attributeRun, commitHashesIn, commitSubjects, ingestRequest, isHeaderSafeToken, matchCommits, parseRepos, summarizeNumstat } from "./lib.mjs";
 
 const DB_URL = process.env.TOKEN_LENS_DB ?? "postgres://paperclip:paperclip@127.0.0.1:54329/paperclip";
-const API = process.env.TOKEN_LENS_API ?? "http://localhost:3100";
+const API = (process.env.TOKEN_LENS_API ?? "http://localhost:3100").replace(/\/+$/, "");
 // space-4x moved to the host's Forgejo on 2026-11-13. Its pull request numbers start again at 1,
 // so its rows and state keys carry the "forgejo:" prefix and never mix with GitHub's.
-const REPOS = (process.env.TOKEN_LENS_REPOS ?? "forgejo:nevysha/space-4x").split(",").map((s) => s.trim()).filter(Boolean);
+const REPOS = parseRepos(process.env.TOKEN_LENS_REPOS ?? "forgejo:nevysha/space-4x");
 const FORGE_URL = process.env.FORGE_URL ?? "http://localhost:3300";
 const FORGE_TOKEN_FILE = process.env.TOKEN_LENS_FORGE_TOKEN_FILE ?? path.join(os.homedir(), ".config/space4x/forgejo-tools-token");
+const API_KEY_FILE = process.env.TOKEN_LENS_API_KEY_FILE;
 const forgeName = (repo) => (repo.startsWith("forgejo:") ? repo.slice("forgejo:".length) : null);
-const forgeToken = () => fs.readFileSync(FORGE_TOKEN_FILE, "utf8").trim();
+// Errors name the variable, never the file content.
+function readSecret(file, variable) {
+  if (!file) throw new Error(`${variable} is not set`);
+  let value;
+  try { value = fs.readFileSync(file, "utf8").trim(); } catch { throw new Error(`${variable} points to a file that can't be read`); }
+  if (!isHeaderSafeToken(value)) throw new Error(`${variable} must hold one token on one line`);
+  return value;
+}
+const forgeToken = () => readSecret(FORGE_TOKEN_FILE, "TOKEN_LENS_FORGE_TOKEN_FILE");
+let apiKey;
+const ingestKey = () => (API_KEY_FILE ? (apiKey ??= readSecret(API_KEY_FILE, "TOKEN_LENS_API_KEY_FILE")) : null);
 // GET on Forgejo's API; the token goes to curl on stdin, never on its command line.
 function forge(apiPath) {
   return JSON.parse(execFileSync("curl", ["-fsS", "-H", "@-", `${FORGE_URL}/api/v1${apiPath}`],
@@ -62,10 +73,8 @@ async function paperclipUp() {
 
 async function post(companyId, body) {
   if (DRY) return;
-  const res = await fetch(`${API}/api/plugins/${PLUGIN}/api/ingest?companyId=${companyId}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
-  });
+  const { url, init } = ingestRequest(API, PLUGIN, companyId, body, ingestKey());
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`ingest failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
