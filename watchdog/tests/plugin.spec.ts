@@ -37,8 +37,8 @@ describe("summarize", () => {
 describe("parseWaits", () => {
   it("keeps well-formed waits and drops the rest", () => {
     const text = JSON.stringify({ waits: [
-      { id: "a", issue: "NEV-1", kind: "ci", repo: "r", ref: "main", createdAt: at(0) },
-      { id: "b", issue: "NEV-2" },
+      { id: "a", issue: "ABC-1", kind: "ci", repo: "r", ref: "main", createdAt: at(0) },
+      { id: "b", issue: "ABC-2" },
     ] });
     expect(parseWaits(text).map((w) => w.id)).toEqual(["a"]);
     expect(parseWaits("nope")).toEqual([]);
@@ -54,7 +54,7 @@ describe("worker", () => {
     process.env.PAPERCLIP_WATCHDOG_DIR = dir;
     writeFileSync(join(dir, "status.json"), JSON.stringify({ ...base, lastTickAt: new Date().toISOString() }));
     writeFileSync(join(dir, "waits.json"), JSON.stringify({ waits: [
-      { id: "w1", issue: "NEV-189", kind: "ci", repo: "Nevysha/space-4x", ref: "feat/x", createdAt: new Date().toISOString() },
+      { id: "w1", issue: "ABC-189", kind: "ci", repo: "owner/repo", ref: "feat/x", createdAt: new Date().toISOString() },
     ] }));
     const { default: plugin } = await import("../src/worker.js");
     harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });

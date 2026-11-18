@@ -2,16 +2,16 @@
 # Register that a Paperclip task is waiting on CI, so the watchdog wakes its owner
 # when the CI run finishes. The agent can then end its run instead of waiting.
 #
-#   paperclip-wait NEV-189 --ci feat/checkpoint-a        # a branch
-#   paperclip-wait NEV-189 --ci 460323a                  # or a commit (7+ hex chars)
-#   paperclip-wait NEV-189 --ci main --repo Nevysha/paperclip-plugins --note "after the merge"
+#   paperclip-wait ABC-189 --ci feat/checkpoint-a        # a branch
+#   paperclip-wait ABC-189 --ci 460323a                  # or a commit (7+ hex chars)
+#   paperclip-wait ABC-189 --ci main --repo owner/other --note "after the merge"
 #   paperclip-wait --list
 #   paperclip-wait --cancel <id>
 #
 # Waits live in ~/.paperclip-dev/watchdog/waits.json (always the paperclip user's real
 # home, even when an agent run sets HOME to its own sandbox folder) and show in the
-# Watchdog button in Paperclip's header and on the Dependencies page. A wait is dropped after 24 hours. The watchdog reads
-# Nevysha/space-4x's CI from the host's Forgejo, and paperclip-plugins' from GitHub.
+# Watchdog button in Paperclip's header and on the Dependencies page. A wait is dropped after 24 hours.
+# The repos, and the default one (the first), come from the watchdog's config.json.
 set -euo pipefail
 
 NODE="$(command -v node || true)"
@@ -31,13 +31,15 @@ const os = require("node:os");
 
 const API = `http://localhost:${process.env.PAPERCLIP_PORT || 3100}/api`;
 // Not os.homedir(): agent runs set HOME to a per-run sandbox folder, so waits written there never
-// reached the watchdog (found 2026-11-14). The account's home from the password database is stable.
+// reached the watchdog. The account's home from the password database is stable.
 const DIR = process.env.PAPERCLIP_WATCHDOG_DIR?.trim() || path.join(os.userInfo().homedir, ".paperclip-dev", "watchdog");
 const FILE = path.join(DIR, "waits.json");
-const REPOS = ["Nevysha/space-4x", "Nevysha/paperclip-plugins"];
+const REPOS = (() => {
+  try { return (JSON.parse(fs.readFileSync(path.join(DIR, "config.json"), "utf8")).repos || []).map((r) => r.name).filter(Boolean); } catch { return []; }
+})();
 const args = process.argv.slice(2);
 const usage = () => {
-  console.error("usage: paperclip-wait NEV-123 --ci <branch|commit> [--repo Nevysha/space-4x] [--note text]\n       paperclip-wait --list | --cancel <id>");
+  console.error("usage: paperclip-wait ABC-123 --ci <branch|commit> [--repo owner/name] [--note text]\n       paperclip-wait --list | --cancel <id>");
   process.exit(2);
 };
 const read = () => { try { return JSON.parse(fs.readFileSync(FILE, "utf8")).waits || []; } catch { return []; } };
@@ -72,6 +74,7 @@ const write = (waits) => {
     else usage();
   }
   if (!ref) usage();
+  if (!REPOS.length) { console.error(`paperclip-wait: no repos in ${path.join(DIR, "config.json")}`); process.exit(2); }
   if (!REPOS.includes(repo)) { console.error(`paperclip-wait: repo must be one of ${REPOS.join(", ")}`); process.exit(2); }
   const r = await fetch(`${API}/issues/${issue}`);
   if (!r.ok) { console.error(`paperclip-wait: can't find ${issue} (${r.status})`); process.exit(1); }

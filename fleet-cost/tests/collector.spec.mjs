@@ -45,7 +45,7 @@ describe("attributeRun", () => {
 
 describe("commits", () => {
   it("reads commit subjects from git commit commands", () => {
-    expect(commitSubjects('git add -A && git commit -q -m "Fix the drain (NEV-1)\n\nBody" && git log --oneline -1')).toEqual(["Fix the drain (NEV-1)"]);
+    expect(commitSubjects('git add -A && git commit -q -m "Fix the drain (ABC-1)\n\nBody" && git log --oneline -1')).toEqual(["Fix the drain (ABC-1)"]);
     expect(commitSubjects("git commit -F - <<'EOF'\nHeredoc subject\n\nbody\nEOF")).toEqual(["Heredoc subject"]);
     expect(commitSubjects("git status")).toEqual([]);
   });

@@ -1,2 +1,4 @@
 dist
 node_modules
+setup.json
+src/setup.generated.ts

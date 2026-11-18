@@ -5,7 +5,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.3.0",
   displayName: "Decision Log",
-  description: "Append-only log of decisions made by agents, with founder review.",
+  description: "Append-only log of decisions made by agents, for the board to review.",
   author: "Nevysha",
   categories: ["ui"],
   capabilities: [

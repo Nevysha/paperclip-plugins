@@ -3,10 +3,10 @@
 #   ~/.local/lib/paperclip-watchdog/watchdog.mjs  -> symlink to watchdog.mjs here
 #   ~/.local/bin/paperclip-notify, paperclip-wait -> symlinks to the scripts here
 #   ~/.config/systemd/user/paperclip-watchdog.{service,timer} (copied), timer not enabled:
-#   paperclip-start starts it and paperclip-stop stops it, so it never runs at boot.
+#   start it with Paperclip (systemctl --user start paperclip-watchdog.timer) and stop it after.
 # The symlinks make this folder the live copy: a `git pull` updates the watchdog.
 # Run it again after changing the unit files. For the timer to keep running without an
-# open WSL session, lingering must be on: sudo loginctl enable-linger "$USER"
+# open login session, lingering must be on: sudo loginctl enable-linger "$USER"
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,6 +22,8 @@ cp "$HERE/paperclip-watchdog.service" "$HERE/paperclip-watchdog.timer" "$HOME/.c
 
 systemctl --user daemon-reload
 systemctl --user disable paperclip-watchdog.timer 2>/dev/null || true
-echo "Watchdog installed. It runs while Paperclip does: paperclip-start starts the timer, paperclip-stop stops it."
+[ -f "$HOME/.paperclip-dev/watchdog/config.json" ] \
+  || echo "Next: copy $HERE/config.example.json to ~/.paperclip-dev/watchdog/config.json and fill it in."
+echo "Watchdog installed. Start its timer with Paperclip: systemctl --user start paperclip-watchdog.timer"
 loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes' \
-  || echo "Lingering is off, so the timer stops when you close WSL. Turn it on with: sudo loginctl enable-linger $USER"
+  || echo "Lingering is off, so the timer stops when you log out. Turn it on with: sudo loginctl enable-linger $USER"

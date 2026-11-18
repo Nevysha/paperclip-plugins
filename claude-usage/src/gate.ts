@@ -1,23 +1,7 @@
-export const ROUTINES = [
-  {
-    key: "po-review",
-    title: "Product Owner review",
-    description: "Review the state of the project and decide what's next, following the \"Scheduled reviews\" section of your instructions. Don't start the proposed work.",
-    label: "Every 4 hours",
-    cron: "0 */4 * * *",
-    defaultEnabled: true,
-  },
-  {
-    key: "safety-review",
-    title: "Safety and system health review",
-    description: "Refresh the snapshot (including blocked tasks), run the overview tool and review both the Safety and System health sections of the report, following the \"Scheduled safety and system health review\" section of your instructions.",
-    label: "Twice a day",
-    cron: "0 8,20 * * *",
-    defaultEnabled: false,
-  },
-] as const;
+import setup from "./setup.generated.js";
 
-export type RoutineKey = (typeof ROUTINES)[number]["key"];
+/** The routines the usage limit can pause, from setup.json (see setup.example.json). */
+export const ROUTINES = setup.routines;
 
 export interface GateSettings {
   /** Session (5-hour) limit, and the weekly one unless weekPauseAtPercent is set. */
@@ -34,7 +18,7 @@ export const DEFAULT_SETTINGS: GateSettings = {
   pausedByGate: {},
 };
 
-export const isRoutineKey = (value: unknown): value is RoutineKey => ROUTINES.some((r) => r.key === value);
+export const isRoutineKey = (value: unknown): value is string => ROUTINES.some((r) => r.key === value);
 
 export const weekLimit = (settings: Pick<GateSettings, "pauseAtPercent" | "weekPauseAtPercent">) =>
   settings.weekPauseAtPercent ?? settings.pauseAtPercent;

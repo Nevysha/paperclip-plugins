@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# paperclip-notify NEV-123 "three-day run finished: all corps passed"
+# paperclip-notify ABC-123 "three-day run finished: all tests passed"
 #
 # Posts a comment on a Paperclip task as the board, which wakes the task's
 # owner. Meant for the end of an agent's background job, so the agent doesn't
@@ -10,7 +10,7 @@ set -euo pipefail
 
 API="http://localhost:${PAPERCLIP_PORT:-3100}/api"
 if [ $# -lt 2 ] || ! [[ "$1" =~ ^[A-Z]+-[0-9]+$ ]]; then
-  echo "usage: paperclip-notify NEV-123 \"what finished and the result\"" >&2
+  echo "usage: paperclip-notify ABC-123 \"what finished and the result\"" >&2
   exit 2
 fi
 ident="$1"; shift

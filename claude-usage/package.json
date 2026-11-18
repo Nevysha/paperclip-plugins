@@ -5,12 +5,12 @@
   "private": true,
   "description": "Shows your Claude subscription usage in the header.",
   "scripts": {
-    "build": "node ./esbuild.config.mjs",
-    "build:rollup": "rollup -c",
-    "dev": "node ./esbuild.config.mjs --watch",
+    "build": "node ./scripts/setup.mjs && node ./esbuild.config.mjs",
+    "build:rollup": "node ./scripts/setup.mjs && rollup -c",
+    "dev": "node ./scripts/setup.mjs && node ./esbuild.config.mjs --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
-    "test": "vitest run --config ./vitest.config.ts",
-    "typecheck": "tsc --noEmit"
+    "test": "node ./scripts/setup.mjs && vitest run --config ./vitest.config.ts",
+    "typecheck": "node ./scripts/setup.mjs && tsc --noEmit"
   },
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",

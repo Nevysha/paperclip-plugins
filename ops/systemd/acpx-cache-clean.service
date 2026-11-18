@@ -1,8 +1,0 @@
-[Unit]
-Description=Delete the caches of Paperclip agent session folders unused for 24 hours
-
-[Service]
-Type=oneshot
-ExecStart=%h/projects/paperclip-plugins/ops/acpx-cache-clean
-Nice=15
-IOSchedulingClass=idle

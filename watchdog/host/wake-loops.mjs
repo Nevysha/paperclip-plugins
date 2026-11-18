@@ -1,8 +1,8 @@
 // Wake-loop detection for the watchdog (pure: no I/O, so it can be tested on its own).
 //
 // A wake loop is an agent restarting on the same issue again and again with nothing new
-// to do: each run ends quickly and Paperclip starts the next one at once. Seen on
-// 2026-11-14 (NEV-588): an agent told to "wait for the board's go" ran 4 times in
+// to do: each run ends quickly and Paperclip starts the next one at once. Seen in
+// practice: an agent told to "wait for the board's go" ran 4 times in
 // 2 minutes, because each "yielded" run registered a continuation that Paperclip
 // re-ran straight away. The watchdog only reports a loop; pausing the agent is a
 // person's call (pausing cancels its run).

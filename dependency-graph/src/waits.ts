@@ -1,7 +1,7 @@
 // Worker side only (reads files): what blocked tasks are waiting on outside Paperclip.
-//  - Background jobs: running processes whose command ends with `paperclip-notify NEV-123 ...`,
+//  - Background jobs: running processes whose command ends with `paperclip-notify ABC-123 ...`,
 //    the pattern agents use for long jobs (`setsid nohup ... bash -c '<cmd>; paperclip-notify ...'`
-//    or a `job-NEV-123-<name>` systemd user unit). Found by scanning /proc, so nothing has to be
+//    or a `job-ABC-123-<name>` systemd user unit). Found by scanning /proc, so nothing has to be
 //    registered and a job that dies simply disappears.
 //  - CI waits that agents registered with `paperclip-wait` (the watchdog's waits.json).
 import { readdir, readFile, readlink, stat, open } from "node:fs/promises";

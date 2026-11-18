@@ -668,7 +668,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
           </p>
         </div>
         <form className="dg-search" onSubmit={(e) => { e.preventDefault(); goTo(); }}>
-          <input aria-label="Go to task" placeholder="Task, e.g. NEV-123" value={query}
+          <input aria-label="Go to task" placeholder="Task, e.g. ABC-123" value={query}
             onChange={(e) => { setQuery(e.target.value); setQueryError(null); }} />
           <button type="submit" className="dg-btn">Show chain</button>
           {queryError ? <span className="dg-err" style={{ fontSize: 12 }} role="alert">{queryError}</span> : null}

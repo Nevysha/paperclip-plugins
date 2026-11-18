@@ -12,7 +12,8 @@
 // Env: TOKEN_LENS_DB (Postgres URL), TOKEN_LENS_API (Paperclip URL), TOKEN_LENS_REPOS
 // (comma-separated: `forgejo:owner/name` for a repo on the host's Forgejo, read with the
 // read-only token in TOKEN_LENS_FORGE_TOKEN_FILE; plain `owner/name` for GitHub, read with
-// GH_CONFIG_DIR, the agents' limited token, never the founder's login).
+// GH_CONFIG_DIR, ideally a limited token rather than a personal login). Without
+// TOKEN_LENS_REPOS it only collects tool calls, and the Efficiency tab stays empty.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -22,11 +23,11 @@ import { attributeRun, commitHashesIn, commitSubjects, ingestRequest, isHeaderSa
 
 const DB_URL = process.env.TOKEN_LENS_DB ?? "postgres://paperclip:paperclip@127.0.0.1:54329/paperclip";
 const API = (process.env.TOKEN_LENS_API ?? "http://localhost:3100").replace(/\/+$/, "");
-// space-4x moved to the host's Forgejo on 2026-11-13. Its pull request numbers start again at 1,
-// so its rows and state keys carry the "forgejo:" prefix and never mix with GitHub's.
-const REPOS = parseRepos(process.env.TOKEN_LENS_REPOS ?? "forgejo:nevysha/space-4x");
-const FORGE_URL = process.env.FORGE_URL ?? "http://localhost:3300";
-const FORGE_TOKEN_FILE = process.env.TOKEN_LENS_FORGE_TOKEN_FILE ?? path.join(os.homedir(), ".config/space4x/forgejo-tools-token");
+// A repo on a Forgejo numbers its pull requests separately from GitHub, so its rows and state
+// keys carry the "forgejo:" prefix and never mix with GitHub's, even when a repo moved.
+const REPOS = parseRepos(process.env.TOKEN_LENS_REPOS ?? "");
+const FORGE_URL = process.env.FORGE_URL ?? "http://localhost:3000";
+const FORGE_TOKEN_FILE = process.env.TOKEN_LENS_FORGE_TOKEN_FILE;
 const API_KEY_FILE = process.env.TOKEN_LENS_API_KEY_FILE;
 const forgeName = (repo) => (repo.startsWith("forgejo:") ? repo.slice("forgejo:".length) : null);
 // Errors name the variable, never the file content.
@@ -222,6 +223,7 @@ async function commitEvidence(sql, companyId) {
 async function collectCommits(sql, companyId, state) {
   let total = 0;
   let evidence = null;
+  if (!REPOS.length) log("TOKEN_LENS_REPOS is not set: skipping merged commits");
   for (const repo of REPOS) {
     const prs = mergedPrs(repo);
     const todo = [];

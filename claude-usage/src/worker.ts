@@ -3,16 +3,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { definePlugin, runWorker, type PluginContext } from "@paperclipai/plugin-sdk";
 import { DEFAULT_SETTINGS, ROUTINES, decide, isOverLimit, isRoutineKey, type GateSettings, weekLimit } from "./gate.js";
+import setup from "./setup.generated.js";
 import { parseCredentials, toUsageFile, toWindows, type UsageResult } from "./usage.js";
 
 const CACHE_MS = 2 * 60 * 1000; // The usage endpoint rate-limits, and the header doesn't need to be fresher than this.
 const PUBLISH_MS = 5 * 60 * 1000;
-const COMPANY_ID = "f305d1c7-0061-4a97-90b4-73783025f4cc";
-const PROJECT_ID = "ee5c6459-1d20-4dcf-b92b-f7d8b0bfe7c4";
-const ASSIGNEES: Record<string, string> = {
-  "po-review": "54511d0a-2ede-4a78-ba2b-ab0e8dfc07e6",
-  "safety-review": "b9860e4a-e2a5-4837-a1b2-155a72b7957e", // the Reviewer (the former DevOps Engineer, renamed 2026-11-16)
-};
+const { companyId: COMPANY_ID, projectId: PROJECT_ID } = setup;
 const SETTINGS_KEY = { scopeKind: "instance" as const, stateKey: "gate-settings" };
 const USAGE_FILE = process.env.CLAUDE_USAGE_FILE?.trim() || join(homedir(), ".paperclip-dev", "claude-usage.json");
 const SIGNED_OUT = "Run `claude` on this machine to sign in or refresh your login, then check again.";
@@ -79,7 +75,7 @@ async function applyGate(ctx: PluginContext, result: UsageResult, settings: Gate
 
   for (const routine of ROUTINES) {
     const resolved = await ctx.routines.managed.reconcile(routine.key, COMPANY_ID, {
-      assigneeAgentId: ASSIGNEES[routine.key],
+      assigneeAgentId: routine.assigneeAgentId,
       projectId: PROJECT_ID,
     });
     const status = resolved.routine?.status;

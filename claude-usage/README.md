@@ -17,12 +17,37 @@ Every 5 minutes it also writes `~/.paperclip-dev/claude-usage.json` (or `CLAUDE_
 
 The panel has two usage limits, one for the 5-hour session and one for the week, and a list of routines. Every 5 minutes, checked routines pause when either window reaches its limit, and resume when it drops. The weekly limit defaults to the session one until you set it. Both are published in `~/.paperclip-dev/claude-usage.json` (`gate.pauseAtPercent`, `gate.weekPauseAtPercent`), and the watchdog uses them too. This runs in the plugin, so it uses no Claude usage.
 
-- Only routines declared in `src/gate.ts` can be listed, because a plugin can only pause routines it owns. To add one, add it there and in `ASSIGNEES` in `src/worker.ts`. New capabilities aren't needed, but new routines are created on the next check.
+- A plugin can only pause routines it owns, so the routines are declared in the plugin itself, from `setup.json` (see below). New routines are created on the next check after a rebuild.
 - A routine you paused by hand stays paused. If you resume one while usage is over the limit, the next check pauses it again.
 - If usage can't be read, routines the plugin paused resume, so a broken login can't silently stop them.
 - It only stops new scheduled runs, not work already running.
 - If you uninstall the plugin, its routines stay as they are, including any that are paused.
-- Company, project and agent IDs are constants in `src/worker.ts`. Unattended checks also need a config row for that company, or Paperclip denies them with "company context is required". After a reinstall, set it with `POST /api/plugins/nevysha.claude-usage/config` and `{"companyId":"...","configJson":{}}`.
+- Unattended checks need a config row for the company, or Paperclip denies them with "company context is required". After a reinstall, set it with `POST /api/plugins/nevysha.claude-usage/config` and `{"companyId":"...","configJson":{}}`.
+
+## Setup
+
+The routines, and the company, project and agents they belong to, come from `setup.json` in this folder. It isn't committed: copy `setup.example.json` and fill it in. Without it the plugin still shows usage, with no routines to pause. The build turns it into `src/setup.generated.ts`, so rebuild after a change.
+
+```json
+{
+  "companyId": "<company ID>",
+  "projectId": "<project the routine tasks go in>",
+  "timezone": "Europe/Paris",
+  "routines": [
+    {
+      "key": "weekly-review",
+      "title": "Weekly review",
+      "description": "The instructions the agent gets at each run.",
+      "label": "Every Monday",
+      "cron": "0 9 * * 1",
+      "assigneeAgentId": "<agent ID>",
+      "defaultEnabled": true
+    }
+  ]
+}
+```
+
+`key` is how Paperclip tracks a routine: changing it creates a new one. `defaultEnabled` is whether the limit pauses it until someone changes its checkbox.
 
 ## Development
 

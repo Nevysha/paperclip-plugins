@@ -1,5 +1,6 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { ROUTINES } from "./gate.js";
+import setup from "./setup.generated.js";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "nevysha.claude-usage",
@@ -23,7 +24,7 @@ const manifest: PaperclipPluginManifestV1 = {
     catchUpPolicy: "skip_missed" as const,
     activityGatePolicy: "require_external_activity" as const,
     activityGateScope: "company" as const,
-    triggers: [{ kind: "schedule" as const, label: r.label, enabled: true, cronExpression: r.cron, timezone: "Europe/Paris", signingMode: null, replayWindowSec: null }],
+    triggers: [{ kind: "schedule" as const, label: r.label, enabled: true, cronExpression: r.cron, timezone: setup.timezone, signingMode: null, replayWindowSec: null }],
   })),
   ui: {
     slots: [

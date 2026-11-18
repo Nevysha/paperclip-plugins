@@ -11,10 +11,10 @@
 //   3. Nudges: a `blocked` task whose blockers are all done, or whose last run
 //      failed, goes back to `todo` with a comment, which wakes its owner.
 //   4. Idle todo: a `todo` task with nothing running and no open blockers gets a wakeup.
-//   5. CI: when a CI run finishes (space-4x on the host's Forgejo, paperclip-plugins on GitHub
-//      Actions), comment on the open task named in the commit message or branch (or whose
-//      recent comments name the commit), which wakes its owner. It also notes when Forgejo's
-//      mirror of space-4x's main on GitHub falls behind.
+//   5. CI: when a CI run finishes (on a Forgejo or on GitHub Actions, per repo in config.json),
+//      comment on the open task named in the commit message or branch (or whose recent
+//      comments name the commit), which wakes its owner. It also notes when a Forgejo repo's
+//      GitHub mirror of main falls behind.
 //   6. Sliced label; 7. Wake loops: an agent restarting on the same issue again and again
 //      with nothing to do (see wake-loops.mjs) is reported in the header, never acted on.
 //   0. Claude login: renews the paperclip user's Claude login (~/.claude/.credentials.json) when it's
@@ -25,8 +25,9 @@
 // over the gate in ~/.paperclip-dev/claude-usage.json. Never sends cards, never
 // closes tasks as done, never starts Paperclip when it's down.
 //
-// Files (in ~/.paperclip-dev/watchdog/): status.json (read by the header plugin),
-// state.json (memory between ticks), watchdog.log, paused (pause flag).
+// Files (in ~/.paperclip-dev/watchdog/): config.json (your company, repos and tokens; see
+// config.example.json), status.json (read by the header plugin), state.json (memory between
+// ticks), watchdog.log, paused (pause flag).
 // Flags: --dry-run (log what it would do, change nothing), --once (same as default).
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, chmodSync, renameSync } from "node:fs";
@@ -37,19 +38,23 @@ import { findWakeLoops } from "./wake-loops.mjs";
 import { ciResultAlreadySeen, blockersWakeAlreadyDelivered } from "./dedupe.mjs";
 
 const HOME = homedir();
-const API = "http://localhost:3100/api";
-const COMPANY = "f305d1c7-0061-4a97-90b4-73783025f4cc";
-const REPOS = ["Nevysha/space-4x", "Nevysha/paperclip-plugins"];
-const GH_CONFIG_DIR = join(HOME, ".config/space4x/gh");
-// Repos on the host's Forgejo (since 2026-11-13), by the name paperclip-wait and the state use.
-// Read with the paperclip-tools account's read-only token; the others stay on GitHub.
-const FORGE = {
-  url: process.env.FORGE_URL?.trim() || "http://localhost:3300",
-  tokenFile: join(HOME, ".config/space4x/forgejo-tools-token"),
-  repos: { "Nevysha/space-4x": "nevysha/space-4x" },
-  mirrors: { "Nevysha/space-4x": "Nevysha/space-4x" }, // Forgejo repo -> its GitHub mirror of main
-};
+const API = `http://localhost:${process.env.PAPERCLIP_PORT || 3100}/api`;
 const DIR = process.env.PAPERCLIP_WATCHDOG_DIR?.trim() || join(HOME, ".paperclip-dev/watchdog");
+const home = (p) => (typeof p === "string" && p.trim() ? p.trim().replace(/^~(?=\/|$)/, HOME) : null);
+const CONFIG = (() => { try { return JSON.parse(readFileSync(join(DIR, "config.json"), "utf8")); } catch { return {}; } })();
+const COMPANY = CONFIG.companyId;
+// Each repo: { name: "owner/repo" } for GitHub Actions, plus `forgejo: "owner/repo"` when its CI runs
+// on the Forgejo, and `githubMirror: "owner/repo"` to check that the Forgejo's main is mirrored there.
+const REPO_LIST = Array.isArray(CONFIG.repos) ? CONFIG.repos.filter((r) => typeof r?.name === "string") : [];
+const REPOS = REPO_LIST.map((r) => r.name);
+// The gh login for GitHub repos. Unset: gh's own default.
+const GH_CONFIG_DIR = home(CONFIG.ghConfigDir);
+const FORGE = {
+  url: process.env.FORGE_URL?.trim() || CONFIG.forgejo?.url || "http://localhost:3000",
+  tokenFile: home(CONFIG.forgejo?.tokenFile), // a read-only token
+  repos: Object.fromEntries(REPO_LIST.filter((r) => r.forgejo).map((r) => [r.name, r.forgejo])),
+  mirrors: Object.fromEntries(REPO_LIST.filter((r) => r.forgejo && r.githubMirror).map((r) => [r.name, r.githubMirror])),
+};
 const FILES = {
   status: join(DIR, "status.json"),
   state: join(DIR, "state.json"),
@@ -58,7 +63,11 @@ const FILES = {
   usage: join(HOME, ".paperclip-dev/claude-usage.json"),
   claudeCredentials: join(HOME, ".claude/.credentials.json"),
 };
-const CLAUDE_BIN = join(HOME, ".local/bin/claude");
+const CLAUDE_BIN = home(CONFIG.claudeBin) || join(HOME, ".local/bin/claude");
+// How to restart Paperclip (an argv list), e.g. ["bash", "-lc", "my-stop && my-start"]. Unset: never restarts.
+const RESTART = Array.isArray(CONFIG.restartCommand) && CONFIG.restartCommand.length ? CONFIG.restartCommand : null;
+// Task identifiers in commit messages and branch names, like ABC-123.
+const IDENT = /\b[A-Z][A-Z0-9]{0,9}-\d+\b/g;
 const DRY = process.argv.includes("--dry-run");
 const LIVE = new Set(["queued", "scheduled_retry", "running"]);
 const CLOSED = new Set(["done", "cancelled"]);
@@ -148,7 +157,7 @@ function renewClaudeLogin() {
   if (typeof after === "number" && after - Date.now() > 15 * MIN) {
     log("info", `renewed the Claude login (${was}); valid until ${new Date(after).toISOString()}`);
   } else {
-    notes.push(`Claude login ${was} and renewing it failed; usage data will go stale. Run: pcx "claude auth status"`);
+    notes.push(`Claude login ${was} and renewing it failed; usage data will go stale. Run \`claude auth status\` as this user`);
     log("warn", `Claude login ${was}; renewal didn't extend it`);
   }
 }
@@ -169,7 +178,7 @@ function writeStatus(extra) {
 
 function gh(args) {
   return execFileSync("gh", args, {
-    env: { ...process.env, GH_CONFIG_DIR },
+    env: GH_CONFIG_DIR ? { ...process.env, GH_CONFIG_DIR } : process.env,
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -177,6 +186,7 @@ function gh(args) {
 
 // GET on Forgejo's API. The token goes to curl on stdin, never on its command line.
 function forge(path) {
+  if (!FORGE.tokenFile) throw new Error("forgejo.tokenFile isn't set in config.json");
   const token = readFileSync(FORGE.tokenFile, "utf8").trim();
   try {
     return JSON.parse(execFileSync("curl", ["-fsS", "-H", "@-", `${FORGE.url}/api/v1${path}`], {
@@ -231,13 +241,13 @@ function checkMirrors() {
 }
 
 function restartPaperclip() {
+  if (!RESTART) { notes.push("A company-wide quarantine needs a Paperclip restart, and restartCommand isn't set in config.json"); return; }
   if (DRY) { act("(would) restart Paperclip to clear the company-wide quarantine"); return; }
-  // zsh -ic loads nvm, which paperclip-start needs. paperclip-stop refuses while
-  // runs are live, so this can't cut off work.
+  // The stop command should refuse while runs are live, so this can't cut off work.
   // Under the systemd timer, anything this run starts is in the service's cgroup, and systemd
-  // kills that cgroup when the oneshot finishes: on 2026-11-10 the restarted Paperclip died
-  // 3 minutes later. A transient scope gives Paperclip its own cgroup.
-  const restart = ["zsh", "-ic", "paperclip-stop && paperclip-start"];
+  // kills that cgroup when the oneshot finishes, so a restarted Paperclip would die minutes
+  // later. A transient scope gives Paperclip its own cgroup.
+  const restart = RESTART;
   const [cmd, ...args] = process.env.INVOCATION_ID
     ? ["systemd-run", "--user", "--scope", "--quiet", "--collect", `--unit=paperclip-${Date.now()}`, ...restart]
     : restart;
@@ -250,6 +260,13 @@ async function main() {
   if (existsSync(FILES.paused)) {
     log("debug", "paused; skipping tick");
     writeStatus({ healthy: null, summary: "Paused" });
+    return;
+  }
+
+  if (!COMPANY) {
+    log("warn", `no companyId in ${join(DIR, "config.json")}; doing nothing`);
+    notes.push("Set companyId in the watchdog's config.json (see host/config.example.json)");
+    writeStatus({ healthy: false, summary: "Not configured" });
     return;
   }
 
@@ -546,7 +563,7 @@ async function checkCi({ gate, detailed, liveIssueIds, issues, runs }) {
           ? forge(`/repos/${FORGE.repos[repo]}/git/commits/${run.headSha}`).commit?.message ?? message
           : gh(["api", `repos/${repo}/commits/${run.headSha}`, "--jq", ".commit.message"]);
       } catch { /* keep title */ }
-      const idents = new Set([...`${message} ${run.headBranch}`.matchAll(/\bNEV-\d+\b/g)].map((m) => m[0]));
+      const idents = new Set([...`${message} ${run.headBranch}`.matchAll(IDENT)].map((m) => m[0]));
       const targets = new Set();
       for (const ident of idents) {
         const i = byIdent.get(ident);

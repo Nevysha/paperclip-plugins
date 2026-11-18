@@ -20,9 +20,9 @@ async function proc(root: string, pid: number, argv: string[], ppid: number, sta
 
 describe("jobCommand", () => {
   it("keeps the job's command and drops the paperclip-notify call", () => {
-    expect(jobCommand(["/usr/bin/bash", "-c", 'node scenarios/s15-war.ts --out x; /home/paperclip/.local/bin/paperclip-notify NEV-568 "done $?"']))
-      .toBe("node scenarios/s15-war.ts --out x");
-    expect(jobCommand(["bash", "-c", "pnpm ci:local && paperclip-notify NEV-1 ok"])).toBe("pnpm ci:local");
+    expect(jobCommand(["/usr/bin/bash", "-c", 'node scenarios/long-run.ts --out x; /home/user/.local/bin/paperclip-notify ABC-568 "done $?"']))
+      .toBe("node scenarios/long-run.ts --out x");
+    expect(jobCommand(["bash", "-c", "pnpm ci:local && paperclip-notify ABC-1 ok"])).toBe("pnpm ci:local");
   });
 });
 
@@ -38,16 +38,16 @@ describe("scanJobs", () => {
   it("finds jobs that will notify a task, with their log, and keeps the innermost process", async () => {
     const root = await temp();
     await writeFile(join(root, "stat"), "cpu 1 2 3\nbtime 1794569797\n");
-    const log = join(root, "NEV-568-full.log");
+    const log = join(root, "ABC-568-full.log");
     await writeFile(log, "hour 345/360\r\nhour 346/360: tick 1\n");
-    const script = 'node run.ts; /home/paperclip/.local/bin/paperclip-notify NEV-568 "finished $?"';
+    const script = 'node run.ts; /home/user/.local/bin/paperclip-notify ABC-568 "finished $?"';
     await proc(root, 100, ["sh", "-c", `setsid nohup bash -c '${script}'`], 1, 500);
     await proc(root, 101, ["/usr/bin/bash", "-c", script], 100, 600, log);
-    await proc(root, 200, ["/usr/bin/bash", "-c", "sleep 9; paperclip-notify NEV-7 hi"], 1, 1000, "/dev/null");
+    await proc(root, 200, ["/usr/bin/bash", "-c", "sleep 9; paperclip-notify ABC-7 hi"], 1, 1000, "/dev/null");
     await proc(root, 300, ["vim", "notes.md"], 1, 1000);
     await proc(root, 400, ["grep", "paperclip-notify"], 1, 1000);
     const jobs = await scanJobs(root);
-    expect(jobs.map((j) => [j.issue, j.pid])).toEqual([["NEV-568", 101], ["NEV-7", 200]]);
+    expect(jobs.map((j) => [j.issue, j.pid])).toEqual([["ABC-568", 101], ["ABC-7", 200]]);
     expect(jobs[0]!.startedAt).toBe(new Date(1794569797_000 + 6_000).toISOString());
     expect(jobs[0]).toMatchObject({ command: "node run.ts", log, lastLine: "hour 346/360: tick 1" });
     expect(jobs[1]!.log).toBeNull();
@@ -59,9 +59,9 @@ describe("scanJobs", () => {
     const log = join(root, "job.log");
     await writeFile(log, "start\nhour 1/360\rhour 2/360\n\n");
     await utimes(log, new Date("2026-11-14T08:00:00Z"), new Date("2026-11-14T08:00:00Z"));
-    await proc(root, 5, ["bash", "-c", "x; paperclip-notify NEV-9 done"], 1, 0, log);
+    await proc(root, 5, ["bash", "-c", "x; paperclip-notify ABC-9 done"], 1, 0, log);
     const [j] = await scanJobs(root);
-    expect(j).toMatchObject({ issue: "NEV-9", command: "x", log, lastLine: "hour 2/360", logUpdatedAt: "2026-11-14T08:00:00.000Z" });
+    expect(j).toMatchObject({ issue: "ABC-9", command: "x", log, lastLine: "hour 2/360", logUpdatedAt: "2026-11-14T08:00:00.000Z" });
   });
 
   it("returns nothing when /proc can't be read", async () => {
@@ -74,7 +74,7 @@ describe("readRegisteredWaits", () => {
     const root = await temp();
     const file = join(root, "waits.json");
     expect(await readRegisteredWaits(file)).toEqual([]);
-    await writeFile(file, JSON.stringify({ waits: [{ id: "a", issue: "NEV-1", kind: "ci", ref: "main", createdAt: "x" }, { id: 3 }] }));
+    await writeFile(file, JSON.stringify({ waits: [{ id: "a", issue: "ABC-1", kind: "ci", ref: "main", createdAt: "x" }, { id: 3 }] }));
     expect(await readRegisteredWaits(file)).toHaveLength(1);
     await writeFile(file, "{not json");
     expect(await readRegisteredWaits(file)).toEqual([]);

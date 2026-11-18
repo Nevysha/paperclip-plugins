@@ -1,10 +1,10 @@
 # Paperclip plugins
 
-Plugins for my local Paperclip instance.
+Plugins for a self-hosted [Paperclip](https://github.com/paperclipai/paperclip) instance. Some need setup for your company (IDs, repos): each README says what.
 
 ## [`decision-log`](decision-log/README.md)
 
-An in-app log of decisions agents made without asking, with founder review.
+An in-app log of decisions agents made without asking, for the board to review.
 
 ![The Decision Log page, showing an entry by the Product Owner with its question, answer, reasoning and sources](decision-log/docs/decision-log.png)
 

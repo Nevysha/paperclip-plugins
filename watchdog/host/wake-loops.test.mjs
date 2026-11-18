@@ -11,7 +11,7 @@ const run = (agentId, issueId, startS, durS, wakeReason = "issue_status_changed"
     contextSnapshot: { wakeReason } };
 };
 
-test("flags the NEV-588 pattern: 4 short runs in 2 minutes", () => {
+test("flags the wait-for-a-go pattern: 4 short runs in 2 minutes", () => {
   const runs = [run("a", "i", -163, 43, "issue_commented"), run("a", "i", -120, 20), run("a", "i", -99, 19), run("a", "i", -80, 24)];
   assert.deepEqual(findWakeLoops(runs, T), [{ agentId: "a", issueId: "i", runs: 3, reasons: ["issue_status_changed"] }]);
 });

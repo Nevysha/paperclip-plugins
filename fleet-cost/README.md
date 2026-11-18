@@ -38,7 +38,7 @@ The plugin was called Fleet Cost; its ID (`nevysha.fleet-cost`) and page URL (`/
 ![The Efficiency tab in dark mode, without docs: tokens per line, cost per 100 lines, lines changed, the share of tokens on tasks that merged nothing, and the three counts side by side](docs/token-lens-efficiency.png)
 
 - **Lines** are the additions and deletions of each merged PR's own commits, before the squash. Lockfiles and binary files are left out; `.md` and `.mdx` count as docs.
-- **Which task a commit belongs to:** the task of the run that made it. The collector finds that run through its `git commit` commands: the hash git printed, or else the commit's first line matched against the commit messages the runs used. Commits from before runs recorded tool calls (the `claude_local` night of Nov 8–9) and merge commits fall back to the task named in the PR title.
+- **Which task a commit belongs to:** the task of the run that made it. The collector finds that run through its `git commit` commands: the hash git printed, or else the commit's first line matched against the commit messages the runs used. Commits from runs that recorded no tool calls, and merge commits, fall back to the task named in the PR title.
 - **A task's tokens** are every run on it, including reviews and retries on that task. Tasks that merged nothing (reviews on their own task, plans, questions, unmerged work) are shown as a share of tokens.
 - The three counts: **All lines** (code and docs); **Without docs** (lines outside `.md`); **Docs only** (`.md` lines). A task that changed both is split run by run: each run that made merged commits gives its own tokens and cost to the code and doc lines of those commits, and the task's other runs (reviews, plans, retries, runs whose commits weren't matched) are split by the task's line counts. So a task whose code was written in one run and its docs in another shows what each cost. Within a single commit, or a single run, a doc line and a code line still cost the same. Without docs plus docs only is exactly all lines, in lines, tokens and cost. Tokens per line and cost per line don't add up: the all-lines figure is the average of the other two, weighted by their lines.
 - Line counts are a rough measure of work: good for trends and outliers, not for ranking agents against each other.
@@ -48,26 +48,26 @@ The plugin was called Fleet Cost; its ID (`nevysha.fleet-cost`) and page URL (`/
 Paperclip doesn't let a plugin read run events (where tool calls are) or call localhost, so `collector/collect.mjs` runs outside it. Every 15 minutes it:
 
 1. reads finished runs' tool and usage events from Postgres and posts per-run summaries to the plugin's `POST /ingest` route;
-2. lists merged PRs (space-4x from the host's Forgejo, with the read-only token in `~/.config/space4x/forgejo-tools-token`; repos still on GitHub with `gh` and the agents' limited token, `GH_CONFIG_DIR=~/.config/space4x/gh`; set the list with `TOKEN_LENS_REPOS`, where `forgejo:owner/name` means Forgejo), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
+2. lists the merged PRs of the repos in `TOKEN_LENS_REPOS` (GitHub repos with `gh`, ideally logged in with a limited token through `GH_CONFIG_DIR`; Forgejo repos with a read-only token), keeps a bare mirror of each repository in `~/.cache/token-lens/` (fetching `refs/pull/*/head`) for per-commit line counts, matches commits to runs, and posts them.
 
-Its settings are environment variables, all optional:
+Its settings are environment variables. Only `TOKEN_LENS_REPOS` is needed for the Efficiency tab; without it the collector only feeds the Tools tab.
 
 | Variable | Default | Use |
 | --- | --- | --- |
 | `TOKEN_LENS_DB` | `postgres://paperclip:paperclip@127.0.0.1:54329/paperclip` | Paperclip's Postgres |
 | `TOKEN_LENS_API` | `http://localhost:3100` | Paperclip's URL |
 | `TOKEN_LENS_API_KEY_FILE` | unset | A file holding a board API key. Set it when the instance runs in `authenticated` mode; the key is sent as a bearer header. Unset sends no key. |
-| `TOKEN_LENS_REPOS` | `forgejo:nevysha/space-4x` | Comma-separated repos; `forgejo:owner/name` means Forgejo, `owner/name` means GitHub |
-| `FORGE_URL` | `http://localhost:3300` | The Forgejo for `forgejo:` repos |
-| `TOKEN_LENS_FORGE_TOKEN_FILE` | `~/.config/space4x/forgejo-tools-token` | A file holding the read-only Forgejo token |
-| `GH_CONFIG_DIR` | gh's own default (the unit sets `~/.config/space4x/gh`) | The `gh` login for GitHub repos |
+| `TOKEN_LENS_REPOS` | unset | Comma-separated repos; `forgejo:owner/name` means Forgejo, `owner/name` means GitHub |
+| `FORGE_URL` | `http://localhost:3000` | The Forgejo for `forgejo:` repos |
+| `TOKEN_LENS_FORGE_TOKEN_FILE` | unset | A file holding a read-only Forgejo token (needed for `forgejo:` repos) |
+| `GH_CONFIG_DIR` | gh's own default | The `gh` login for GitHub repos |
 
-The systemd unit also reads `~/.config/token-lens/env` when it exists, so another host can set these without editing the unit.
+The systemd unit reads them from `~/.config/token-lens/env`, one `VAR=value` per line. It expects the plugin in `~/projects/paperclip-plugins/fleet-cost`; set `TOKEN_LENS_DIR` there if it's elsewhere.
 
-It does nothing when Paperclip isn't answering and never starts it. Its timer doesn't start at boot either: `paperclip-start` (in [`ops/`](../ops/)) starts it, with a first pass 2 minutes later, and `paperclip-stop` stops it. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
+It does nothing when Paperclip isn't answering and never starts it. Its timer doesn't start at boot either: start it with Paperclip and stop it after. Its cursor is in `~/.local/state/token-lens/state.json`; `--full` re-sends everything, `--dry-run` prints instead of posting.
 
 ```sh
-GH_CONFIG_DIR=~/.config/space4x/gh node collector/collect.mjs          # one pass
+TOKEN_LENS_REPOS=owner/repo node collector/collect.mjs                 # one pass
 systemctl --user link $PWD/collector/systemd/token-lens-collect.{service,timer}
 systemctl --user start token-lens-collect.timer                         # every 15 minutes, until stopped
 journalctl --user -u token-lens-collect -n 20                           # its log

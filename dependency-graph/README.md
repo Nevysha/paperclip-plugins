@@ -8,17 +8,17 @@ A **Dependencies** page that draws which tasks wait on which, as a graph, and wh
 
 - **The graph:** one box per task, coloured like Paperclip's statuses. An arrow goes from a blocker to the task it blocks, so work flows left to right (or top to bottom). An arrow from a finished or cancelled blocker is faint, because it no longer holds anything up.
 - **Wait boxes** (dashed), linked to the task they hold up:
-  - **Job:** a running process that will call `paperclip-notify` for the task when it ends, the pattern agents use for long runs (`setsid nohup ... bash -c '<command>; paperclip-notify NEV-123 ...'`, or a `job-NEV-123-<name>` systemd user unit). It shows the command, how long it has run, and the last line of its log. **Quiet** means the log hasn't changed for 30 minutes.
+  - **Job:** a running process that will call `paperclip-notify` for the task when it ends, the pattern agents use for long runs (`setsid nohup ... bash -c '<command>; paperclip-notify ABC-123 ...'`, or a `job-ABC-123-<name>` systemd user unit). It shows the command, how long it has run, and the last line of its log. **Quiet** means the log hasn't changed for 30 minutes.
   - **CI:** a CI wait an agent registered with `paperclip-wait`.
 - **Blocked tasks are always drawn**, even with no links, so a lone blocked task is visible.
 - **Which chains:**
   - by default, only chains that still have an open task;
   - or every chain;
-  - or one task's chain: everything upstream and downstream of it. Open it with the search box, by double-clicking a task, with **Show only this chain**, or with a link to `/<prefix>/dependencies?focus=NEV-123`.
+  - or one task's chain: everything upstream and downstream of it. Open it with the search box, by double-clicking a task, with **Show only this chain**, or with a link to `/<prefix>/dependencies?focus=ABC-123`.
 - **Options:** hide finished tasks, add dashed parent → sub-task links, switch direction, and pick a project (only when there's more than one). The page remembers these choices in your browser.
 - **Hover** a task to light up its whole chain. **Click** it for the side panel: assignee, priority, last update, what it waits on, what it blocks, its parent task, and a link to open it.
 - **Flags on tasks:**
-  - **Stale:** still marked blocked, but every task it waits on is closed. Paperclip should have woken it, so it needs a nudge. This overlaps with the overview-tool idea in NEV-390.
+  - **Stale:** still marked blocked, but every task it waits on is closed. Paperclip should have woken it, so it needs a nudge.
   - **Holds up N:** open, waits on no other task, and has N open tasks downstream. This is where a chain has to move. It may still be marked Blocked for another reason, such as waiting on a person or a card.
   - **Loop:** tasks that wait on each other in a circle, so none of them can start.
   - **Needs you:** blocked, with no open blocker and nothing running, and its unblock note names the board or a user.
@@ -31,7 +31,7 @@ The page refreshes every 30 seconds. Drag to move, scroll to zoom, or use **+**,
 
 ## How it works
 
-The worker reads `issues` (including `unblock_descriptor`, the unblock note), `issue_relations` (type `blocks`: `issue_id` blocks `related_issue_id`), `agents` and `projects` for the company. It owns no tables, and its only write is the Wake it button (`POST /tasks/:id/wake`, board only), which needs `issues.update`, `issue.comments.create` and `issues.wakeup`. Outside the database it scans `/proc` for processes whose command line calls `paperclip-notify NEV-123` (`src/waits.ts`), following their standard output to the log file, and reads the CI waits in the watchdog's `~/.paperclip-dev/watchdog/waits.json`. A job that dies simply disappears, so nothing has to be registered or cleaned up. The page does the analysis (`src/graph.ts`) and lays the graph out with [dagre](https://github.com/dagrejs/dagre), pinned to 3.1.3 and bundled into the UI.
+The worker reads `issues` (including `unblock_descriptor`, the unblock note), `issue_relations` (type `blocks`: `issue_id` blocks `related_issue_id`), `agents` and `projects` for the company. It owns no tables, and its only write is the Wake it button (`POST /tasks/:id/wake`, board only), which needs `issues.update`, `issue.comments.create` and `issues.wakeup`. Outside the database it scans `/proc` for processes whose command line calls `paperclip-notify ABC-123` (`src/waits.ts`), following their standard output to the log file, and reads the CI waits in the watchdog's `~/.paperclip-dev/watchdog/waits.json`. A job that dies simply disappears, so nothing has to be registered or cleaned up. The page does the analysis (`src/graph.ts`) and lays the graph out with [dagre](https://github.com/dagrejs/dagre), pinned to 3.1.3 and bundled into the UI.
 
 ## Develop
 

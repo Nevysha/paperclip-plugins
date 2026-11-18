@@ -59,7 +59,7 @@ async function waitsFor(ctx: PluginContext, tasks: RawTask[]): Promise<Wait[]> {
   for (const w of registered) {
     const taskId = byIdent.get(w.issue);
     if (!taskId || w.kind !== "ci") continue;
-    const repo = w.repo && w.repo !== "Nevysha/space-4x" ? ` (${w.repo.split("/").pop()})` : "";
+    const repo = w.repo ? ` (${w.repo.split("/").pop()})` : "";
     out.push({ id: `wait:ci:${w.id}`, taskId, kind: "ci", title: `CI on ${w.ref ?? "?"}${repo}`, detail: w.note ?? null, since: w.createdAt });
   }
   return out;

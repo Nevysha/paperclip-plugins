@@ -3,7 +3,7 @@ import manifest from "../src/manifest.js";
 import { analyse, chainOf, findTask, isQuiet, wakeComment, select, withLiveRuns, type GraphData, type Relation, type SelectOptions, type Task, type Wait } from "../src/graph.js";
 
 const task = (n: number, status = "todo", over: Partial<Task> = {}): Task => ({
-  id: `t${n}`, identifier: `NEV-${n}`, title: `Task ${n}`, status, priority: "medium", parentId: null,
+  id: `t${n}`, identifier: `ABC-${n}`, title: `Task ${n}`, status, priority: "medium", parentId: null,
   projectId: "p1", assigneeName: null, assignedToUser: false, updatedAt: "2026-11-11T00:00:00.000Z", ...over,
 });
 const blocks = (from: number, to: number): Relation => ({ blockerId: `t${from}`, blockedId: `t${to}` });
@@ -155,9 +155,9 @@ describe("chainOf", () => {
 describe("findTask", () => {
   const d = data([task(12), task(120)], []);
   it("matches identifiers case-insensitively and bare numbers", () => {
-    expect(findTask(d, "nev-12")?.id).toBe("t12");
+    expect(findTask(d, "abc-12")?.id).toBe("t12");
     expect(findTask(d, "120")?.id).toBe("t120");
-    expect(findTask(d, "NEV-7")).toBeNull();
+    expect(findTask(d, "XYZ-7")).toBeNull();
     expect(findTask(d, "  ")).toBeNull();
   });
 });

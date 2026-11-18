@@ -3,7 +3,7 @@ import manifest from "../src/manifest.js";
 import { costOf, groupBy, monthsBetween, total, weekKey, weeksBetween, type UsageRow } from "../src/pricing.js";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
-  day: "2026-11-11", agentId: "a", agentName: "A", issueId: "i", issueIdentifier: "NEV-1", issueTitle: "T",
+  day: "2026-11-11", agentId: "a", agentName: "A", issueId: "i", issueIdentifier: "ABC-1", issueTitle: "T",
   model: "claude-opus-5-5", runs: 1, input: 0, cacheWrite: 0, cached: 0, output: 0, ...over,
 });
 

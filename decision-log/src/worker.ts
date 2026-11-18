@@ -101,7 +101,7 @@ async function review(ctx: PluginContext, input: PluginApiRequestInput) {
   if (status === "overturned" && existing.review_status !== "overturned" && existing.issue_id) {
     await ctx.issues.createComment(
       existing.issue_id,
-      `**The founder overturned a decision on this task.**\n\nQuestion: ${existing.question}\n\nInstead: ${note}`,
+      `**The board overturned a decision on this task.**\n\nQuestion: ${existing.question}\n\nInstead: ${note}`,
       input.companyId,
     );
     notified = true;

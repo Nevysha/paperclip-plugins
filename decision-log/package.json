@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "type": "module",
   "private": true,
-  "description": "Append-only log of decisions made by agents, with founder review.",
+  "description": "Append-only log of decisions made by agents, for the board to review.",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "build:rollup": "rollup -c",

@@ -1,7 +1,7 @@
 // Duplicate-wake checks for the watchdog (pure: no I/O, so they can be tested on their own).
 //
 // A follow-up wake resumes the task's whole session, so a wake that only repeats what the agent
-// already knows can cost as much as real work (seen 2026-11-16: a "CI passed" comment after the
+// already knows can cost as much as real work (for example a "CI passed" comment after the
 // agent had waited for that CI in its own run, and a nudge after Paperclip had already woken the
 // agent because its blockers finished). These checks say when the watchdog can stay quiet.
 //

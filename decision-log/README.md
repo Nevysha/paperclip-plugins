@@ -1,6 +1,6 @@
 # Decision Log
 
-A Paperclip plugin: an in-app log of decisions agents made without asking the founder.
+A Paperclip plugin: an in-app log of decisions agents made without asking the board.
 Open it with the **Decisions** button in the top bar, or at `/<company prefix>/decision-log`, for example `/NEV/decision-log`.
 
 ![The Decision Log page, showing an entry by the Product Owner with its question, answer, reasoning and sources](docs/decision-log.png)

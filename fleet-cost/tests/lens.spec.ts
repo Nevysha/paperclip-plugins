@@ -7,11 +7,11 @@ const tool = (over: Partial<ToolRow>): ToolRow => ({
   calls: 1, stepTokens: 0, resultTokens: 0, outputBytes: 0, durationMs: 0, input: 0, cacheWrite: 0, cached: 0, output: 0, ...over,
 });
 const usage = (over: Partial<IssueUsage>): IssueUsage => ({
-  issueId: "i1", issueIdentifier: "NEV-1", issueTitle: "T", model: "claude-opus-5-5", runs: 1, agents: "A", lastDay: "2026-11-11",
+  issueId: "i1", issueIdentifier: "ABC-1", issueTitle: "T", model: "claude-opus-5-5", runs: 1, agents: "A", lastDay: "2026-11-11",
   input: 0, cacheWrite: 0, cached: 0, output: 0, ...over,
 });
 const commit = (over: Partial<CommitRow>): CommitRow => ({
-  sha: "x", prNumber: 1, prTitle: "P (NEV-1)", mergedDay: "2026-11-11", matchMethod: "hash",
+  sha: "x", prNumber: 1, prTitle: "P (ABC-1)", mergedDay: "2026-11-11", matchMethod: "hash",
   codeAdded: 0, codeDeleted: 0, docAdded: 0, docDeleted: 0, codeFiles: 0, docFiles: 0, issueId: "i1", runId: null, agentId: "a", agentName: "A", ...over,
 });
 const run = (over: Partial<RunUsage>): RunUsage => ({
@@ -41,7 +41,7 @@ describe("tools", () => {
 
 describe("efficiency", () => {
   const data = () => buildTasks(
-    [usage({ cached: 10_000_000 }), usage({ issueId: "i2", issueIdentifier: "NEV-2", cached: 4_000_000 }), usage({ issueId: "i3", cached: 1_000_000 })],
+    [usage({ cached: 10_000_000 }), usage({ issueId: "i2", issueIdentifier: "ABC-2", cached: 4_000_000 }), usage({ issueId: "i3", cached: 1_000_000 })],
     [
       commit({ codeAdded: 80, codeDeleted: 20, docAdded: 100 }),
       commit({ sha: "y", issueId: "i2", docAdded: 40 }),
