@@ -5,9 +5,9 @@
 // Each tick, unless paused (~/.paperclip-dev/watchdog/paused exists):
 //   1. Quarantine: if new runs fail with native_session_cleanup_quarantined since
 //      Paperclip started (a company-wide freeze), restart Paperclip once nothing is live.
-//   2. Held tasks: a task whose failed run Paperclip won't replay
-//      (executionBlocker set) is recreated as a "(Restarted) ..." copy, its
-//      dependants are re-pointed at the copy, and the original is cancelled.
+//   2. Held tasks: a task whose failed run Paperclip won't replay (executionBlocker set)
+//      is reported in the header for a person. It is not copied: the copy would go to the
+//      same agent, and when the agent itself can't start, every copy fails the same way.
 //   3. Nudges: a `blocked` task whose blockers are all done, or whose last run
 //      failed, goes back to `todo` with a comment, which wakes its owner.
 //   4. Idle todo: a `todo` task with nothing running and no open blockers gets a wakeup.
@@ -21,7 +21,7 @@
 //      about to expire, by running `claude auth status`. The claude-usage plugin reads that login
 //      but never renews it, and without fresh usage data the usage gate below stops gating.
 //      Agents don't use it (each run gets its own CLAUDE_CODE_OAUTH_TOKEN).
-// Steps 2-5 start agent runs, so they're skipped while Claude usage is at or
+// Steps 3-5 start agent runs, so they're skipped while Claude usage is at or
 // over the gate in ~/.paperclip-dev/claude-usage.json. Never sends cards, never
 // closes tasks as done, never starts Paperclip when it's down.
 //
@@ -74,7 +74,6 @@ const CLOSED = new Set(["done", "cancelled"]);
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const LIMITS = {
   restartGap: 20 * MIN, restartsPerDay: 6,
-  copiesPerDay: 10, maxRestartDepth: 3,
   nudgeGapPerTask: 6 * HOUR, nudgesPerDay: 20,
   wakeGapPerTask: HOUR, quietBeforeWake: 10 * MIN,
   ciLookback: Number(process.env.WATCHDOG_CI_LOOKBACK_MIN ?? 120) * MIN, ciPendingMax: 3 * HOUR,
@@ -100,7 +99,7 @@ function writeJsonAtomic(path, value) {
 }
 
 const state = Object.assign(
-  { ciSeen: {}, ciPending: {}, ciDelivered: {}, nudged: {}, woke: {}, loopsLogged: {}, restarts: [], copies: [], nudges: [], recentActions: [] },
+  { ciSeen: {}, ciPending: {}, ciDelivered: {}, nudged: {}, woke: {}, loopsLogged: {}, restarts: [], nudges: [], recentActions: [] },
   readJson(FILES.state, {}),
 );
 const within = (list, ms) => list.filter((t) => now - t < ms);
@@ -342,36 +341,14 @@ async function main() {
   for (const i of open) detailed.set(i.id, await api("GET", `/issues/${i.id}`));
   const openDeps = (d) => (d.blockedBy ?? []).filter((b) => !CLOSED.has(b.status));
 
-  if (gate.open) {
-    // 2. Held tasks -> restarted copies
-    for (const d of detailed.values()) {
-      if (!d.executionBlocker || liveIssueIds.has(d.id)) continue;
-      const depth = (d.title.match(/^\(Restarted(?: x(\d+))?\)/) ?? [])[1];
-      const level = d.title.startsWith("(Restarted") ? Number(depth ?? 1) : 0;
-      if (level >= LIMITS.maxRestartDepth) { notes.push(`${d.identifier} has been restarted ${level} times; leaving it for a person`); continue; }
-      if (within(state.copies, DAY).length >= LIMITS.copiesPerDay) { notes.push("Daily limit of restarted copies reached"); break; }
-      const baseTitle = d.title.replace(/^\(Restarted(?: x\d+)?\) /, "");
-      const title = `${level ? `(Restarted x${level + 1})` : "(Restarted)"} ${baseTitle}`.slice(0, 240);
-      const note = `_Restarted copy of ${d.identifier}, made by the Paperclip watchdog. Its last run failed on a Paperclip platform error (${d.executionBlocker.cause ?? "held run"}), not on anything in the work, and Paperclip won't restart that task. **Read ${d.identifier}'s comments first**: they hold the context and any progress so far, and some of the work may already be done. ${d.identifier} is cancelled; continue here._\n\n`;
-      const deps = (d.blockedBy ?? []).filter((b) => !CLOSED.has(b.status)).map((b) => b.id);
-      const copy = await mutate(`recreated held task ${d.identifier} as a restarted copy`, "POST", `/companies/${COMPANY}/issues`, {
-        title, description: note + (d.description ?? ""), status: "todo", priority: d.priority,
-        assigneeAgentId: d.assigneeAgentId, parentId: d.parentId, projectId: d.projectId,
-        ...(deps.length ? { blockedByIssueIds: deps } : {}),
-      });
-      if (!copy) continue;
-      state.copies.push(now);
-      for (const other of detailed.values()) {
-        if (!(other.blockedBy ?? []).some((b) => b.id === d.id)) continue;
-        const ids = other.blockedBy.map((b) => (b.id === d.id ? copy.id : b.id));
-        await mutate(`re-pointed ${other.identifier} to wait on ${copy.identifier} instead of ${d.identifier}`, "PATCH", `/issues/${other.id}`, { blockedByIssueIds: ids });
-      }
-      await mutate(`cancelled ${d.identifier} (replaced by ${copy.identifier})`, "PATCH", `/issues/${d.id}`, {
-        status: "cancelled",
-        comment: `Watchdog: replaced by ${copy.identifier} after a Paperclip platform error left this task unable to restart. Work continues there.`,
-      });
-    }
+  // 2. Held tasks: reported, never copied. A copy goes to the same agent, so when the agent itself
+  // can't start (a broken setup, oversized instructions...) every copy fails the same way.
+  for (const d of detailed.values()) {
+    if (!d.executionBlocker || liveIssueIds.has(d.id)) continue;
+    notes.push(`${d.identifier} is held by a Paperclip platform error (${d.executionBlocker.cause ?? "held run"}); needs a person`);
+  }
 
+  if (gate.open) {
     // 3. Nudge blocked tasks that nothing will wake
     for (const d of detailed.values()) {
       if (d.status !== "blocked" || d.executionBlocker || liveIssueIds.has(d.id) || !d.assigneeAgentId) continue;
@@ -603,7 +580,6 @@ function finish(extra) {
   state.recentActions.push(...actions);
   state.recentActions = state.recentActions.slice(-50);
   state.restarts = within(state.restarts, 7 * DAY);
-  state.copies = within(state.copies, 7 * DAY);
   state.nudges = within(state.nudges, 7 * DAY);
   for (const m of [state.nudged, state.woke, state.loopsLogged]) for (const k of Object.keys(m)) if (now - m[k] > 7 * DAY) delete m[k];
   if (!DRY) writeJsonAtomic(FILES.state, state);
