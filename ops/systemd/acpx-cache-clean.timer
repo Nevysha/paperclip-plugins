@@ -1,0 +1,8 @@
+[Unit]
+Description=Clean stale agent session caches once a day
+# Not enabled at boot: paperclip-start starts this timer and paperclip-stop stops it.
+
+[Timer]
+OnActiveSec=30min
+OnUnitActiveSec=1d
+Persistent=false

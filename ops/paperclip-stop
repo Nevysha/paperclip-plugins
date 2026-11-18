@@ -16,7 +16,7 @@ PORT="${PAPERCLIP_PORT:-3100}"
 PIDFILE="$DATA/paperclip.pid"
 API="http://localhost:$PORT/api"
 WAIT_SECONDS=60
-TIMERS=(paperclip-watchdog.timer token-lens-collect.timer)
+TIMERS=(paperclip-watchdog.timer token-lens-collect.timer acpx-cache-clean.timer)
 
 force=0
 case "${1:-}" in
