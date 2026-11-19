@@ -3,7 +3,6 @@
 //    the pattern agents use for long jobs (`setsid nohup ... bash -c '<cmd>; paperclip-notify ...'`
 //    or a `job-ABC-123-<name>` systemd user unit). Found by scanning /proc, so nothing has to be
 //    registered and a job that dies simply disappears.
-//  - CI waits that agents registered with `paperclip-wait` (the watchdog's waits.json).
 import { readdir, readFile, readlink, stat, open } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -18,8 +17,6 @@ export type JobProcess = {
   logUpdatedAt: string | null;
   lastLine: string | null;
 };
-
-export type RegisteredWait = { id: string; issue: string; kind: string; repo?: string; ref?: string; createdAt: string; note?: string };
 
 const NOTIFY = /paperclip-notify["']?\s+["']?([A-Z][A-Z0-9]*-\d+)\b/;
 
@@ -101,16 +98,4 @@ export async function scanJobs(proc = "/proc"): Promise<JobProcess[]> {
     .filter((j) => !parents.has(j.pid))
     .map(({ ppid: _ppid, ...j }) => j)
     .sort((a, b) => a.issue.localeCompare(b.issue) || a.pid - b.pid);
-}
-
-export async function readRegisteredWaits(file: string): Promise<RegisteredWait[]> {
-  try {
-    const value = JSON.parse(await readFile(file, "utf8")) as { waits?: unknown };
-    if (!Array.isArray(value?.waits)) return [];
-    return value.waits.filter((w): w is RegisteredWait =>
-      !!w && typeof w === "object" && typeof (w as RegisteredWait).id === "string"
-      && typeof (w as RegisteredWait).issue === "string" && typeof (w as RegisteredWait).createdAt === "string");
-  } catch {
-    return [];
-  }
 }

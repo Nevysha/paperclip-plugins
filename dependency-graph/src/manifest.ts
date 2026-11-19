@@ -3,19 +3,15 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "nevysha.dependency-graph",
   apiVersion: 1,
-  version: "0.1.0",
+  version: "0.2.0",
   displayName: "Dependency Graph",
-  description: "A graph of which tasks block which, and what blocked tasks wait on (jobs, CI, people), with stuck chains highlighted.",
+  description: "A graph of which tasks block which, and what blocked tasks wait on (jobs, people), with stuck chains highlighted.",
   author: "Nevysha",
   categories: ["ui"],
   capabilities: [
     "api.routes.register",
     "database.namespace.migrate",
     "database.namespace.read",
-    // Only for the "Wake it" button: move a blocked task nothing will wake to To do, explain why, and wake its assignee.
-    "issue.comments.create",
-    "issues.update",
-    "issues.wakeup",
     "ui.action.register",
     "ui.page.register",
     "ui.sidebar.register",
@@ -24,9 +20,8 @@ const manifest: PaperclipPluginManifestV1 = {
     worker: "./dist/worker.js",
     ui: "./dist/ui",
   },
-  // The plugin owns no tables and only reads tasks, their blocker links, agents and projects. Its one write is the
-  // board's "Wake it" button (POST /tasks/:id/wake).
-  // Outside the database it reads /proc (running background jobs) and the watchdog's waits.json.
+  // The plugin owns no tables and only reads tasks, their blocker links, agents and projects. It writes nothing.
+  // Outside the database it reads /proc (running background jobs).
   database: {
     migrationsDir: "migrations",
     coreReadTables: ["issues", "issue_relations", "agents", "projects"],
@@ -39,14 +34,6 @@ const manifest: PaperclipPluginManifestV1 = {
       auth: "board",
       capability: "api.routes.register",
       companyResolution: { from: "query", key: "companyId" },
-    },
-    {
-      routeKey: "wake",
-      method: "POST",
-      path: "/tasks/:id/wake",
-      auth: "board",
-      capability: "api.routes.register",
-      companyResolution: { from: "body", key: "companyId" },
     },
   ],
   ui: {
