@@ -1,34 +1,69 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { definePlugin, runWorker, type PluginContext } from "@paperclipai/plugin-sdk";
 import { DEFAULT_SETTINGS, ROUTINES, decide, isOverLimit, isRoutineKey, type GateSettings, weekLimit } from "./gate.js";
 import setup from "./setup.generated.js";
-import { parseCredentials, toUsageFile, toWindows, type UsageResult } from "./usage.js";
+import { needsRenewal, parseCredentials, toUsageFile, toWindows, type UsageResult } from "./usage.js";
 
 const CACHE_MS = 2 * 60 * 1000; // The usage endpoint rate-limits, and the header doesn't need to be fresher than this.
 const PUBLISH_MS = 5 * 60 * 1000;
 const { companyId: COMPANY_ID, projectId: PROJECT_ID } = setup;
 const SETTINGS_KEY = { scopeKind: "instance" as const, stateKey: "gate-settings" };
 const USAGE_FILE = process.env.CLAUDE_USAGE_FILE?.trim() || join(homedir(), ".paperclip-dev", "claude-usage.json");
-const SIGNED_OUT = "Run `claude` on this machine to sign in or refresh your login, then check again.";
+const SIGNED_OUT = "Run `claude` on this machine to sign in, then check again.";
+
+const execFileAsync = promisify(execFile);
 
 let lastGood: Extract<UsageResult, { status: "ok" }> | null = null;
 let cached: { expires: number; result: Promise<UsageResult> } | null = null;
 
-async function readToken(): Promise<string | null> {
-  const dir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+const CREDENTIALS_FILE = join(process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude"), ".credentials.json");
+const RENEW_RETRY_MS = 5 * 60 * 1000;
+let lastRenewAttempt = 0;
+
+async function readCredentials(): Promise<string | null> {
   try {
-    return parseCredentials(await readFile(join(dir, ".credentials.json"), "utf8"));
+    return await readFile(CREDENTIALS_FILE, "utf8");
   } catch {
     return null;
   }
 }
 
+function claudeBin(): string {
+  const configured = process.env.CLAUDE_BIN?.trim();
+  if (configured) return configured;
+  const local = join(homedir(), ".local", "bin", "claude");
+  return existsSync(local) ? local : "claude";
+}
+
+// The access token lasts about 8 hours. `claude auth status` swaps it for a new one with the stored refresh
+// token when it's close to expiry: no model call, no usage. Its output names the account, so it's discarded.
+async function renewLogin(log: PluginContext["logger"]): Promise<void> {
+  if (Date.now() - lastRenewAttempt < RENEW_RETRY_MS) return;
+  lastRenewAttempt = Date.now();
+  try {
+    await execFileAsync(claudeBin(), ["auth", "status"], { timeout: 60_000 });
+  } catch (err) {
+    // A non-zero exit can still have renewed it; the next read says.
+    log.warn("claude auth status failed", { error: String((err as Error).message).slice(0, 200) });
+  }
+  if (needsRenewal(await readCredentials())) log.warn("Renewing the Claude login didn't extend it. Run `claude` on this machine.");
+  else log.info("Renewed the Claude login");
+}
+
 // The token stays in this function: it's only sent to Anthropic, and is never returned or logged.
-async function fetchUsage(): Promise<UsageResult> {
+async function fetchUsage(log: PluginContext["logger"]): Promise<UsageResult> {
   const fallback = (result: UsageResult): UsageResult => (lastGood ? { ...lastGood, stale: true } : result);
-  const token = await readToken();
+  let raw = await readCredentials();
+  if (needsRenewal(raw)) {
+    await renewLogin(log);
+    raw = await readCredentials();
+  }
+  const token = raw ? parseCredentials(raw) : null;
   if (!token) return fallback({ status: "signed_out", message: SIGNED_OUT });
   try {
     const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
@@ -44,9 +79,9 @@ async function fetchUsage(): Promise<UsageResult> {
   }
 }
 
-function getUsage(): Promise<UsageResult> {
+function getUsage(log: PluginContext["logger"]): Promise<UsageResult> {
   if (!cached || cached.expires <= Date.now()) {
-    cached = { expires: Date.now() + CACHE_MS, result: fetchUsage() };
+    cached = { expires: Date.now() + CACHE_MS, result: fetchUsage(log) };
   }
   return cached.result;
 }
@@ -93,7 +128,7 @@ function tick(ctx: PluginContext, change?: (settings: GateSettings) => GateSetti
   const run = queue.then(async () => {
     const before = await readSettings(ctx);
     const changed = change ? change(before) : before;
-    const result = await getUsage();
+    const result = await getUsage(ctx.logger);
     const after = await applyGate(ctx, result, changed);
     await ctx.state.set(SETTINGS_KEY, after);
     await publishUsage(result, after);
@@ -119,7 +154,7 @@ async function gateView(ctx: PluginContext) {
 
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.data.register("usage", getUsage);
+    ctx.data.register("usage", () => getUsage(ctx.logger));
     ctx.data.register("gate", () => gateView(ctx));
 
     ctx.actions.register("setRoutineEnabled", async ({ key, enabled }) => {

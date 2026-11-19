@@ -6,8 +6,12 @@ Click it for all windows and reset times, and to set which routines pause at a u
 ![The usage button in the header, open on a panel showing session and weekly usage with reset times, the pause limit and the routine checkboxes](docs/usage-panel.png)
 
 The plugin reads the login in `~/.claude/.credentials.json` (or `CLAUDE_CONFIG_DIR`), sends the token only to
-`api.anthropic.com/api/oauth/usage`, and never returns or logs it. Results are cached for 2 minutes. It doesn't
-refresh the login: when the token expires, running `claude` on this machine renews it.
+`api.anthropic.com/api/oauth/usage`, and never returns or logs it. Results are cached for 2 minutes.
+
+The token lasts about 8 hours. When it has less than 15 minutes left, the plugin renews it by running
+`claude auth status` (`CLAUDE_BIN`, else `~/.local/bin/claude`, else `claude` on the `PATH`), which swaps it for a new
+one with the stored refresh token. That makes no model call and uses no usage. If renewing fails, it tries again
+5 minutes later and the panel says to sign in; running `claude` on this machine fixes it.
 
 The usage shown is for the account logged in to Claude Code on this machine.
 
@@ -15,7 +19,7 @@ Every 5 minutes it also writes `~/.paperclip-dev/claude-usage.json` (or `CLAUDE_
 
 ## Pausing routines
 
-The panel has two usage limits, one for the 5-hour session and one for the week, and a list of routines. Every 5 minutes, checked routines pause when either window reaches its limit, and resume when it drops. The weekly limit defaults to the session one until you set it. Both are published in `~/.paperclip-dev/claude-usage.json` (`gate.pauseAtPercent`, `gate.weekPauseAtPercent`), and the watchdog uses them too. This runs in the plugin, so it uses no Claude usage.
+The panel has two usage limits, one for the 5-hour session and one for the week, and a list of routines. Every 5 minutes, checked routines pause when either window reaches its limit, and resume when it drops. The weekly limit defaults to the session one until you set it. Both are published in `~/.paperclip-dev/claude-usage.json` (`gate.pauseAtPercent`, `gate.weekPauseAtPercent`), for other local tools to use. This runs in the plugin, so it uses no Claude usage.
 
 - A plugin can only pause routines it owns, so the routines are declared in the plugin itself, from `setup.json` (see below). New routines are created on the next check after a rebuild.
 - A routine you paused by hand stays paused. If you resume one while usage is over the limit, the next check pauses it again.

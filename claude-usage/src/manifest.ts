@@ -5,7 +5,7 @@ import setup from "./setup.generated.js";
 const manifest: PaperclipPluginManifestV1 = {
   id: "nevysha.claude-usage",
   apiVersion: 1,
-  version: "0.3.1",
+  version: "0.4.0",
   displayName: "Claude Usage",
   description: "Shows your Claude subscription usage in the header.",
   author: "Nevysha",

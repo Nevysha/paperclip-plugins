@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ROUTINES, decide, isOverLimit } from "../src/gate.js";
 import manifest from "../src/manifest.js";
-import { parseCredentials, toUsageFile, toWindows } from "../src/usage.js";
+import { RENEW_MARGIN_MS, needsRenewal, parseCredentials, toUsageFile, toWindows } from "../src/usage.js";
 
 describe("manifest", () => {
   it("declares a routine for each configurable key", () => {
@@ -38,6 +38,23 @@ describe("parseCredentials", () => {
     expect(parseCredentials(file({ accessToken: "t", expiresAt: 500 }), 1000)).toBeNull();
     expect(parseCredentials(file({}), 1000)).toBeNull();
     expect(parseCredentials("not json", 1000)).toBeNull();
+  });
+});
+
+describe("needsRenewal", () => {
+  const file = (o: object) => JSON.stringify({ claudeAiOauth: { accessToken: "t", refreshToken: "r", ...o } });
+  it("renews a login close to expiry or already expired", () => {
+    expect(needsRenewal(file({ expiresAt: 1000 + RENEW_MARGIN_MS }), 1000)).toBe(true);
+    expect(needsRenewal(file({ expiresAt: 500 }), 1000)).toBe(true);
+  });
+  it("leaves a fresh login alone", () => {
+    expect(needsRenewal(file({ expiresAt: 1000 + RENEW_MARGIN_MS + 1 }), 1000)).toBe(false);
+  });
+  it("can't renew without a login, a refresh token or an expiry", () => {
+    expect(needsRenewal(null, 1000)).toBe(false);
+    expect(needsRenewal("not json", 1000)).toBe(false);
+    expect(needsRenewal(file({ refreshToken: undefined, expiresAt: 500 }), 1000)).toBe(false);
+    expect(needsRenewal(file({}), 1000)).toBe(false);
   });
 });
 
