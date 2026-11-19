@@ -10,20 +10,15 @@
 //      same agent, and when the agent itself can't start, every copy fails the same way.
 //   3. Nudges: a `blocked` task whose blockers are all done, or whose last run
 //      failed, goes back to `todo` with a comment, which wakes its owner.
-//   4. Idle todo: a `todo` task with nothing running and no open blockers gets a wakeup.
-//   5. CI: when a CI run finishes (on a Forgejo or on GitHub Actions, per repo in config.json),
-//      comment on the open task named in the commit message or branch (or whose recent
-//      comments name the commit), which wakes its owner. It also notes when a Forgejo repo's
-//      GitHub mirror of main falls behind.
-//   6. Sliced label; 7. Wake loops: an agent restarting on the same issue again and again
+//   4. Mirrors: notes when a Forgejo repo's GitHub mirror of main falls behind (report only).
+//   5. Sliced label; 6. Wake loops: an agent restarting on the same issue again and again
 //      with nothing to do (see wake-loops.mjs) is reported in the header, never acted on.
-//   0. Claude login: renews the paperclip user's Claude login (~/.claude/.credentials.json) when it's
-//      about to expire, by running `claude auth status`. The claude-usage plugin reads that login
-//      but never renews it, and without fresh usage data the usage gate below stops gating.
-//      Agents don't use it (each run gets its own CLAUDE_CODE_OAUTH_TOKEN).
-// Steps 3-5 start agent runs, so they're skipped while Claude usage is at or
-// over the gate in ~/.paperclip-dev/claude-usage.json. Never sends cards, never
-// closes tasks as done, never starts Paperclip when it's down.
+// It doesn't relay CI results: an agent waiting on CI sets a Paperclip monitor on its task
+// (executionPolicy.monitor), and Paperclip wakes it to check.
+// Step 3 starts agent runs, so it's skipped while Claude usage is at or over the gate in
+// ~/.paperclip-dev/claude-usage.json (written by the claude-usage plugin, if installed; without it
+// nothing is gated, and the header says so). Never sends cards, never closes tasks as done, never
+// starts Paperclip when it's down, never wakes a task just because it's idle.
 //
 // Files (in ~/.paperclip-dev/watchdog/): config.json (your company, repos and tokens; see
 // config.example.json), status.json (read by the header plugin), state.json (memory between
@@ -35,7 +30,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findWakeLoops } from "./wake-loops.mjs";
-import { ciResultAlreadySeen, blockersWakeAlreadyDelivered } from "./dedupe.mjs";
+import { blockersWakeAlreadyDelivered } from "./dedupe.mjs";
 
 const HOME = homedir();
 const API = `http://localhost:${process.env.PAPERCLIP_PORT || 3100}/api`;
@@ -43,11 +38,9 @@ const DIR = process.env.PAPERCLIP_WATCHDOG_DIR?.trim() || join(HOME, ".paperclip
 const home = (p) => (typeof p === "string" && p.trim() ? p.trim().replace(/^~(?=\/|$)/, HOME) : null);
 const CONFIG = (() => { try { return JSON.parse(readFileSync(join(DIR, "config.json"), "utf8")); } catch { return {}; } })();
 const COMPANY = CONFIG.companyId;
-// Each repo: { name: "owner/repo" } for GitHub Actions, plus `forgejo: "owner/repo"` when its CI runs
-// on the Forgejo, and `githubMirror: "owner/repo"` to check that the Forgejo's main is mirrored there.
+// Repos to check for mirror drift: { name, forgejo: "owner/repo", githubMirror: "owner/repo" }.
 const REPO_LIST = Array.isArray(CONFIG.repos) ? CONFIG.repos.filter((r) => typeof r?.name === "string") : [];
-const REPOS = REPO_LIST.map((r) => r.name);
-// The gh login for GitHub repos. Unset: gh's own default.
+// The gh login used to read the GitHub mirrors. Unset: gh's own default.
 const GH_CONFIG_DIR = home(CONFIG.ghConfigDir);
 const FORGE = {
   url: process.env.FORGE_URL?.trim() || CONFIG.forgejo?.url || "http://localhost:3000",
@@ -61,13 +54,9 @@ const FILES = {
   log: join(DIR, "watchdog.log"),
   paused: join(DIR, "paused"),
   usage: join(HOME, ".paperclip-dev/claude-usage.json"),
-  claudeCredentials: join(HOME, ".claude/.credentials.json"),
 };
-const CLAUDE_BIN = home(CONFIG.claudeBin) || join(HOME, ".local/bin/claude");
 // How to restart Paperclip (an argv list), e.g. ["bash", "-lc", "my-stop && my-start"]. Unset: never restarts.
 const RESTART = Array.isArray(CONFIG.restartCommand) && CONFIG.restartCommand.length ? CONFIG.restartCommand : null;
-// Task identifiers in commit messages and branch names, like ABC-123.
-const IDENT = /\b[A-Z][A-Z0-9]{0,9}-\d+\b/g;
 const DRY = process.argv.includes("--dry-run");
 const LIVE = new Set(["queued", "scheduled_retry", "running"]);
 const CLOSED = new Set(["done", "cancelled"]);
@@ -75,8 +64,6 @@ const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const LIMITS = {
   restartGap: 20 * MIN, restartsPerDay: 6,
   nudgeGapPerTask: 6 * HOUR, nudgesPerDay: 20,
-  wakeGapPerTask: HOUR, quietBeforeWake: 10 * MIN,
-  ciLookback: Number(process.env.WATCHDOG_CI_LOOKBACK_MIN ?? 120) * MIN, ciPendingMax: 3 * HOUR,
 };
 
 mkdirSync(DIR, { recursive: true, mode: 0o700 });
@@ -99,9 +86,11 @@ function writeJsonAtomic(path, value) {
 }
 
 const state = Object.assign(
-  { ciSeen: {}, ciPending: {}, ciDelivered: {}, nudged: {}, woke: {}, loopsLogged: {}, restarts: [], nudges: [], recentActions: [] },
+  { nudged: {}, loopsLogged: {}, restarts: [], nudges: [], recentActions: [] },
   readJson(FILES.state, {}),
 );
+// Memory of steps that were removed: idle-todo wakes, and the CI relay.
+for (const k of ["woke", "ciSeen", "ciPending", "ciDelivered"]) delete state[k];
 const within = (list, ms) => list.filter((t) => now - t < ms);
 
 async function api(method, path, body) {
@@ -126,39 +115,15 @@ async function mutate(desc, method, path, body) {
 
 function usageGate() {
   const u = readJson(FILES.usage, null);
-  if (!u) return { open: true, why: "usage file missing; not gating" };
+  if (!u) return { open: true, unknown: true, why: "no usage data (the claude-usage plugin writes it)" };
   const limit = u.gate?.pauseAtPercent ?? 80;
   const weekLimit = u.gate?.weekPauseAtPercent ?? limit;
   const stale = !u.fetchedAt || now - Date.parse(u.fetchedAt) > 30 * MIN;
-  if (stale) return { open: true, why: "usage data stale; not gating" };
+  if (stale) return { open: true, unknown: true, why: "usage data is over 30 min old" };
   const hot = (typeof u.sessionPercent === "number" && u.sessionPercent >= limit) || (typeof u.weekPercent === "number" && u.weekPercent >= weekLimit);
   return hot
     ? { open: false, why: `usage ${u.sessionPercent}% session (limit ${limit}%) / ${u.weekPercent}% week (limit ${weekLimit}%)` }
     : { open: true, why: `usage ${u.sessionPercent}% session / ${u.weekPercent}% week` };
-}
-
-// The access token lasts about 8 h. `claude auth status` swaps it for a new one with the stored
-// refresh token when it's near expiry or expired: no model call, no cost. Its output names the
-// account, so it isn't logged. Ticks are 3.5 min apart, so a 15 min margin gives a few tries.
-function renewClaudeLogin() {
-  const expiresAt = () => readJson(FILES.claudeCredentials, null)?.claudeAiOauth?.expiresAt;
-  const before = expiresAt();
-  if (typeof before !== "number") { notes.push("Claude login file has no expiry; can't renew it (usage data may go stale)"); return; }
-  if (before - now > 15 * MIN) return;
-  const was = before <= now ? `expired ${Math.round((now - before) / MIN)} min ago` : `expiring in ${Math.round((before - now) / MIN)} min`;
-  if (DRY) { log("info", `(would) renew the Claude login (${was})`); return; }
-  try {
-    execFileSync(CLAUDE_BIN, ["auth", "status"], { stdio: "ignore", timeout: 60_000 });
-  } catch (e) {
-    log("warn", `claude auth status failed: ${String(e.message).slice(0, 200)}`);
-  }
-  const after = expiresAt();
-  if (typeof after === "number" && after - Date.now() > 15 * MIN) {
-    log("info", `renewed the Claude login (${was}); valid until ${new Date(after).toISOString()}`);
-  } else {
-    notes.push(`Claude login ${was} and renewing it failed; usage data will go stale. Run \`claude auth status\` as this user`);
-    log("warn", `Claude login ${was}; renewal didn't extend it`);
-  }
 }
 
 function writeStatus(extra) {
@@ -194,32 +159,6 @@ function forge(path) {
   } catch (e) {
     throw new Error(`Forgejo GET ${path}: ${String(e.stderr || e.message).trim().split("\n")[0]}`);
   }
-}
-
-// Forgejo's recent CI jobs, in the shape `gh run list` gives, so the rest stays the same.
-// A pull request's job names the pull request ("#12") instead of its branch: look it up.
-function forgeRuns(repo) {
-  const fr = FORGE.repos[repo];
-  const prs = new Map();
-  const pr = (n) => { if (!prs.has(n)) prs.set(n, forge(`/repos/${fr}/pulls/${n}`)); return prs.get(n); };
-  const done = new Set(["success", "failure", "cancelled", "skipped"]);
-  return (forge(`/repos/${fr}/actions/tasks?limit=30`).workflow_runs ?? []).map((t) => {
-    const n = /^#(\d+)$/.exec(t.head_branch ?? "")?.[1];
-    const p = n ? pr(n) : null;
-    return {
-      databaseId: `forgejo-${t.id}`,
-      displayTitle: t.display_title,
-      headBranch: p ? p.head?.ref : t.head_branch,
-      headSha: t.head_sha,
-      status: done.has(t.status) ? "completed" : t.status,
-      conclusion: done.has(t.status) ? t.status : null,
-      updatedAt: t.updated_at,
-      url: t.url,
-      event: t.event,
-      workflowName: (t.workflow_id ?? "CI").replace(/\.ya?ml$/, ""),
-      pr: p,
-    };
-  });
 }
 
 // Forgejo pushes main to GitHub on every merge. If they differ for a while, say so: the
@@ -269,9 +208,6 @@ async function main() {
     return;
   }
 
-  // 0. Claude login, so the usage data (and the usage gate) stay fresh.
-  renewClaudeLogin();
-
   let health;
   try { health = await api("GET", "/health"); } catch (e) {
     log("warn", "Paperclip is not answering; doing nothing (it may have been stopped on purpose)");
@@ -312,9 +248,10 @@ async function main() {
 
   const gate = usageGate();
   if (!gate.open) notes.push(`Not waking agents: ${gate.why}`);
+  else if (gate.unknown) notes.push(`Usage limits not applied: ${gate.why}`);
 
   // After Claude's session limit resets, runs that failed on the limit can start again. Forget the
-  // per-task cooldowns once, so stalled tasks get nudged and woken on the first tick after a reset
+  // per-task cooldowns once, so stalled tasks get nudged on the first tick after a reset
   // instead of hours later. The daily caps still apply.
   const usage = readJson(FILES.usage, null);
   const resetsAt = usage?.sessionResetsAt ? Date.parse(usage.sessionResetsAt) : NaN;
@@ -322,13 +259,13 @@ async function main() {
   // Right after a reset there's no session window yet, so the usage file has no reset time at all.
   if (!Number.isFinite(resetsAt) && usage?.status === "ok" && !usage.stale && gate.open
     && Number.isFinite(prevResetsAt) && prevResetsAt <= now) {
-    state.nudged = {}; state.woke = {}; state.sessionResetsAt = null;
+    state.nudged = {}; state.sessionResetsAt = null;
     act(`Claude session limit reset (was due ${new Date(prevResetsAt).toISOString()}); cleared per-task cooldowns`);
   }
   if (Number.isFinite(resetsAt)) {
     const prev = prevResetsAt;
     if (gate.open && Number.isFinite(prev) && prev <= now && resetsAt > prev) {
-      state.nudged = {}; state.woke = {};
+      state.nudged = {};
       act(`Claude session limit reset (was due ${new Date(prev).toISOString()}); cleared per-task cooldowns`);
     }
     // While the gate is closed, keep the old time, so the sweep happens on the first open tick.
@@ -374,33 +311,16 @@ async function main() {
       });
       state.nudged[d.id] = now; state.nudges.push(now);
     }
-
-    // 4. Wake idle todo tasks
-    for (const d of detailed.values()) {
-      if (d.status !== "todo" || !d.assigneeAgentId || liveIssueIds.has(d.id) || openDeps(d).length) continue;
-      const agent = agentById.get(d.assigneeAgentId);
-      if (!agent || ["paused", "terminated", "pending_approval"].includes(agent.status)) continue;
-      if (now - Date.parse(d.updatedAt) < LIMITS.quietBeforeWake) continue;
-      if (state.woke[d.id] && now - state.woke[d.id] < LIMITS.wakeGapPerTask) continue;
-      state.woke[d.id] = now;
-      if (DRY) { act(`(would) wake ${agent.name} on idle todo task ${d.identifier}`); continue; }
-      const r = await api("POST", `/agents/${agent.id}/wakeup`, {
-        source: "automation", triggerDetail: "system", reason: `Watchdog: ${d.identifier} is todo with nothing running`,
-        payload: { issueId: d.id },
-      });
-      if (r?.status === "skipped") log("debug", `wake for ${d.identifier} skipped: ${r.reason}`);
-      else act(`woke ${agent.name} on idle todo task ${d.identifier}`);
-    }
   }
 
-  // 5. CI results -> comments on the waiting task
-  await checkCi({ gate, detailed, liveIssueIds, issues, runs });
+  // 4. GitHub mirrors of Forgejo repos: report only.
+  checkMirrors();
 
-  // 6. Tasks marked "Sized: one run" get the Sliced label (agents' create_task can't set labels).
+  // 5. Tasks marked "Sized: one run" get the Sliced label (agents' create_task can't set labels).
   // Only the label changes, so this runs even while the usage gate is closed.
   await labelSliced(issues);
 
-  // 7. Wake loops: report only. Pausing the agent is a person's call (it cancels its run).
+  // 6. Wake loops: report only. Pausing the agent is a person's call (it cancels its run).
   const identById = new Map(issues.map((i) => [i.id, i.identifier]));
   const loops = findWakeLoops(runs, now).map((l) => ({
     ...l, agent: agentById.get(l.agentId)?.name ?? l.agentId, issue: identById.get(l.issueId) ?? l.issueId,
@@ -432,156 +352,12 @@ async function labelSliced(issues) {
   }
 }
 
-// Waits registered with paperclip-wait, in ~/.paperclip-dev/watchdog/waits.json.
-const WAITS_FILE = join(DIR, "waits.json");
-const WAIT_MAX_AGE = DAY;
-const readWaits = () => readJson(WAITS_FILE, { waits: [] }).waits ?? [];
-function removeWaits(ids) {
-  if (!ids.size || DRY) return;
-  // Re-read right before writing so a wait added meanwhile isn't lost.
-  writeJsonAtomic(WAITS_FILE, { waits: readWaits().filter((w) => !ids.has(w.id)) });
-}
-
-async function deliverCi(d, run, why) {
-  const key = `${d.id}|${run.databaseId}`;
-  if (state.ciDelivered[key]) return true;
-  const sha7 = run.headSha.slice(0, 7);
-  const verdict = run.conclusion === "success" ? "passed" : run.conclusion || "finished";
-  const body = {
-    comment: `Watchdog: CI ${verdict} for \`${run.headBranch}\` at ${sha7} (${run.workflowName ?? "CI"}, ${run.event}): ${run.url}${why ? `\n\n${why}` : ""}`,
-    ...(d.status === "blocked" && !(d.blockedBy ?? []).some((b) => !CLOSED.has(b.status)) && !d.executionBlocker ? { status: "todo" } : {}),
-  };
-  await mutate(`told ${d.identifier} that CI ${verdict} on ${run.headBranch} (${sha7})`, "PATCH", `/issues/${d.id}`, body);
-  if (!DRY) state.ciDelivered[key] = now;
-  return true;
-}
-
-async function checkWaits({ gate, detailed, liveIssueIds, byIdent, runsByRepo }) {
-  const done = new Set();
-  for (const w of readWaits()) {
-    const issue = byIdent.get(w.issue);
-    const d = issue && detailed.get(issue.id);
-    if (!d) { log("info", `dropped wait ${w.id}: ${w.issue} is closed or missing`); done.add(w.id); continue; }
-    if (now - Date.parse(w.createdAt) > WAIT_MAX_AGE) {
-      notes.push(`Dropped a 24 h old CI wait for ${w.issue} on ${w.ref}`); done.add(w.id); continue;
-    }
-    const isSha = /^[0-9a-f]{7,40}$/i.test(w.ref);
-    // CI can finish just before the agent registers the wait; allow 10 minutes of slack.
-    const match = (runsByRepo.get(w.repo) ?? [])
-      .filter((r) => r.status === "completed" && (isSha ? r.headSha.startsWith(w.ref.toLowerCase()) : r.headBranch === w.ref)
-        && Date.parse(r.updatedAt) >= Date.parse(w.createdAt) - 10 * MIN)
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
-    if (!match) continue;
-    if (!gate.open || liveIssueIds.has(d.id)) continue; // try again next tick
-    await deliverCi(d, match, `(${w.issue} registered this wait with paperclip-wait${w.note ? `: ${w.note}` : ""}.)`);
-    if (!DRY) done.add(w.id);
-  }
-  removeWaits(done);
-}
-
-// A result nobody can act on wakes an agent for nothing: the commit is no longer the head of
-// its branch (a newer push replaced it), the branch is gone, or its pull request is merged or
-// closed. Returns why it's stale, or null. On a GitHub or Forgejo error, deliver rather than drop it.
-function staleReason(repo, run) {
-  if (!run.headBranch || run.headBranch === "main") return null;
-  if (FORGE.repos[repo]) {
-    try {
-      if (run.event === "pull_request" && run.pr) {
-        const p = run.pr;
-        if (p.state !== "open") return `its pull request #${p.number} is ${p.merged ? "merged" : "closed"}`;
-        return p.head?.sha === run.headSha ? null : `a newer commit replaced it in pull request #${p.number}`;
-      }
-      const tip = forge(`/repos/${FORGE.repos[repo]}/branches/${encodeURIComponent(run.headBranch)}`).commit?.id;
-      return tip === run.headSha ? null : "a newer commit replaced it on the branch";
-    } catch (e) {
-      return /\b404\b/.test(String(e.message)) ? "the branch is gone" : null;
-    }
-  }
-  try {
-    if (run.event === "pull_request") {
-      const prs = JSON.parse(gh(["api", `repos/${repo}/commits/${run.headSha}/pulls`]));
-      const open = prs.filter((p) => p.state === "open");
-      if (!open.length) return prs.length ? `its pull request #${prs[0].number} is ${prs[0].merged_at ? "merged" : "closed"}` : "no open pull request has this commit";
-      if (!open.some((p) => p.head?.sha === run.headSha)) return `a newer commit replaced it in pull request #${open[0].number}`;
-      return null;
-    }
-    const tip = gh(["api", `repos/${repo}/branches/${encodeURIComponent(run.headBranch)}`, "--jq", ".commit.sha"]).trim();
-    return tip === run.headSha ? null : "a newer commit replaced it on the branch";
-  } catch (e) {
-    if (/HTTP 404|Branch not found/i.test(String(e.message) + String(e.stderr ?? ""))) return "the branch is gone";
-    return null;
-  }
-}
-
-async function checkCi({ gate, detailed, liveIssueIds, issues, runs }) {
-  const byIdent = new Map(issues.map((i) => [i.identifier, i]));
-  const runsByRepo = new Map();
-  for (const repo of REPOS) {
-    try {
-      runsByRepo.set(repo, FORGE.repos[repo] ? forgeRuns(repo) : JSON.parse(gh(["run", "list", "-R", repo, "-L", "30", "--json",
-        "databaseId,displayTitle,headBranch,headSha,conclusion,status,updatedAt,url,event,workflowName"])));
-    } catch (e) { notes.push(`Couldn't read CI for ${repo}: ${String(e.message).slice(0, 120)}`); }
-  }
-  checkMirrors();
-  await checkWaits({ gate, detailed, liveIssueIds, byIdent, runsByRepo });
-  for (const [repo, runs] of runsByRepo) {
-    for (const run of runs) {
-      const key = `${repo}#${run.databaseId}`;
-      if (run.status !== "completed" || state.ciSeen[key]) continue;
-      if (now - Date.parse(run.updatedAt) > LIMITS.ciLookback && !state.ciPending[key]) { state.ciSeen[key] = now; continue; }
-      if (state.ciPending[key] && now - state.ciPending[key] > LIMITS.ciPendingMax) {
-        log("warn", `gave up delivering CI result ${key}`); state.ciSeen[key] = now; delete state.ciPending[key]; continue;
-      }
-      const stale = staleReason(repo, run);
-      if (stale) { log("debug", `CI ${key} ${run.headBranch}@${run.headSha.slice(0, 7)} skipped: ${stale}`); state.ciSeen[key] = now; delete state.ciPending[key]; continue; }
-      let message = run.displayTitle ?? "";
-      try {
-        message = FORGE.repos[repo]
-          ? forge(`/repos/${FORGE.repos[repo]}/git/commits/${run.headSha}`).commit?.message ?? message
-          : gh(["api", `repos/${repo}/commits/${run.headSha}`, "--jq", ".commit.message"]);
-      } catch { /* keep title */ }
-      const idents = new Set([...`${message} ${run.headBranch}`.matchAll(IDENT)].map((m) => m[0]));
-      const targets = new Set();
-      for (const ident of idents) {
-        const i = byIdent.get(ident);
-        if (i && detailed.has(i.id)) targets.add(i.id);
-      }
-      // Fallback: an open task whose recent comments name this commit or branch.
-      const sha7 = run.headSha.slice(0, 7);
-      for (const d of detailed.values()) {
-        if (targets.has(d.id) || !["blocked", "in_progress", "todo"].includes(d.status)) continue;
-        const comments = list(await api("GET", `/issues/${d.id}/comments?limit=20`), "comments")
-          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 3);
-        const text = comments.map((c) => c.body ?? "").join("\n");
-        if (text.includes(sha7) || (run.headBranch !== "main" && text.includes(run.headBranch))) targets.add(d.id);
-      }
-      log("debug", `CI ${key} ${run.conclusion} ${run.headBranch}@${sha7} names [${[...idents].join(",")}] -> open targets [${[...targets].map((id) => detailed.get(id).identifier).join(",")}]`);
-      if (!targets.size) { state.ciSeen[key] = now; continue; }
-      if (!gate.open) { state.ciPending[key] ??= now; continue; }
-      let delivered = true;
-      for (const id of targets) {
-        if (liveIssueIds.has(id)) { delivered = false; continue; } // a live run would swallow the wake; retry next tick
-        // The agent was running when CI finished (it waited for it) or has run since: it knows.
-        // Registered waits (paperclip-wait) are still always delivered, by checkWaits.
-        if (ciResultAlreadySeen(runs, id, run.updatedAt)) {
-          log("debug", `CI ${key} not posted on ${detailed.get(id).identifier}: its agent already saw the result`);
-          continue;
-        }
-        await deliverCi(detailed.get(id), run);
-      }
-      if (delivered) { state.ciSeen[key] = now; delete state.ciPending[key]; } else state.ciPending[key] ??= now;
-    }
-  }
-  // Keep the memory small.
-  for (const m of [state.ciSeen, state.ciDelivered]) for (const k of Object.keys(m)) if (now - m[k] > 3 * DAY) delete m[k];
-}
-
 function finish(extra) {
   state.recentActions.push(...actions);
   state.recentActions = state.recentActions.slice(-50);
   state.restarts = within(state.restarts, 7 * DAY);
   state.nudges = within(state.nudges, 7 * DAY);
-  for (const m of [state.nudged, state.woke, state.loopsLogged]) for (const k of Object.keys(m)) if (now - m[k] > 7 * DAY) delete m[k];
+  for (const m of [state.nudged, state.loopsLogged]) for (const k of Object.keys(m)) if (now - m[k] > 7 * DAY) delete m[k];
   if (!DRY) writeJsonAtomic(FILES.state, state);
   writeStatus(extra);
 }

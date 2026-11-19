@@ -57,10 +57,6 @@ const smallButton: CSSProperties = {
 };
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-const since = (iso: string) => {
-  const min = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
-  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`;
-};
 
 function Dot({ level }: { level: Level }) {
   return <span aria-hidden style={{ width: 8, height: 8, borderRadius: 4, background: DOT[level], flexShrink: 0 }} />;
@@ -81,7 +77,6 @@ function useNarrow() {
 export function WatchdogButton(_props: PluginWidgetProps) {
   const { data, error, refresh } = usePluginData<StatusView>("status");
   const setPaused = usePluginAction("setPaused");
-  const cancelWait = usePluginAction("cancelWait");
   const toast = usePluginToast();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -154,23 +149,6 @@ export function WatchdogButton(_props: PluginWidgetProps) {
             <div style={section}>
               <strong style={{ fontSize: 12 }}>Notes</strong>
               {data.notes.map((n, i) => <div key={i} style={{ fontSize: 12, overflowWrap: "anywhere" }}>{n}</div>)}
-            </div>
-          ) : null}
-
-          {data?.waits.length ? (
-            <div style={section}>
-              <strong style={{ fontSize: 12 }}>Waiting on CI</strong>
-              {data.waits.map((w) => (
-                <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-                  <span style={{ flex: 1, overflowWrap: "anywhere" }}>
-                    <strong>{w.issue}</strong> waits for <code>{w.ref}</code> <span style={muted}>· {since(w.createdAt)}</span>
-                  </span>
-                  <button type="button" disabled={busy} style={smallButton} aria-label={`Stop waiting on ${w.ref} for ${w.issue}`}
-                    onClick={() => void run("Couldn't remove that wait", () => cancelWait({ id: w.id }))}>
-                    Remove
-                  </button>
-                </div>
-              ))}
             </div>
           ) : null}
 

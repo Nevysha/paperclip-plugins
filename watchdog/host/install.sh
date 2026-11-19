@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the watchdog's host side from this folder:
 #   ~/.local/lib/paperclip-watchdog/watchdog.mjs  -> symlink to watchdog.mjs here
-#   ~/.local/bin/paperclip-notify, paperclip-wait -> symlinks to the scripts here
+#   ~/.local/bin/paperclip-notify                 -> symlink to the script here
 #   ~/.config/systemd/user/paperclip-watchdog.{service,timer} (copied), timer not enabled:
 #   start it with Paperclip (systemctl --user start paperclip-watchdog.timer) and stop it after.
 # The symlinks make this folder the live copy: a `git pull` updates the watchdog.
@@ -14,10 +14,10 @@ mkdir -p "$HOME/.local/lib/paperclip-watchdog" "$HOME/.local/bin" "$HOME/.config
 mkdir -p -m 700 "$HOME/.paperclip-dev/watchdog"
 
 ln -sfn "$HERE/watchdog.mjs" "$HOME/.local/lib/paperclip-watchdog/watchdog.mjs"
-for cmd in paperclip-notify paperclip-wait; do
-  chmod +x "$HERE/$cmd"
-  ln -sfn "$HERE/$cmd" "$HOME/.local/bin/$cmd"
-done
+chmod +x "$HERE/paperclip-notify"
+ln -sfn "$HERE/paperclip-notify" "$HOME/.local/bin/paperclip-notify"
+# paperclip-wait was removed (agents set a Paperclip monitor on the task instead): drop its old link.
+if [ -L "$HOME/.local/bin/paperclip-wait" ]; then rm "$HOME/.local/bin/paperclip-wait"; fi
 cp "$HERE/paperclip-watchdog.service" "$HERE/paperclip-watchdog.timer" "$HOME/.config/systemd/user/"
 
 systemctl --user daemon-reload

@@ -22,7 +22,7 @@ An **Approvals** button in the header, with a flag showing how many are pending,
 
 ## [`watchdog`](watchdog/README.md)
 
-A **Watchdog** button in the header showing whether the watchdog (a timer outside Paperclip that restarts stalled work) is running, what it did recently, and which tasks wait on CI, with pause and resume.
+A **Watchdog** button in the header showing whether the watchdog (a timer outside Paperclip that restarts stalled work) is running and what it did recently, with pause and resume.
 
 ![The Watchdog button in the header, open on a panel that says All clear, with a Pause button and recent actions](watchdog/docs/watchdog-panel.png)
 

@@ -3,7 +3,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "nevysha.watchdog",
   apiVersion: 1,
-  version: "0.1.0",
+  version: "0.2.0",
   displayName: "Watchdog",
   description: "Shows the Paperclip watchdog's state in the header, with pause and resume.",
   author: "Nevysha",
