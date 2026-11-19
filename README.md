@@ -54,6 +54,10 @@ curl -X POST http://localhost:3100/api/plugins/install -H 'content-type: applica
 
 `.paperclip-sdk/` holds the SDK snapshots each plugin builds against, so a clone builds without a Paperclip checkout.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 [MIT](LICENSE)
