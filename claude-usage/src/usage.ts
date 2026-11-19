@@ -40,7 +40,25 @@ export function toWindows(body: unknown): UsageWindow[] {
   return windows;
 }
 
-/** Returns the access token, or null if there is no usable login. Claude Code refreshes it; this never does. */
+/** How long before expiry the worker renews the login. Checks run every 2 to 5 minutes, so this gives a few tries. */
+export const RENEW_MARGIN_MS = 15 * 60 * 1000;
+
+/**
+ * Whether the login should be renewed: it expires within RENEW_MARGIN_MS or already has.
+ * False when there's no login or no expiry, since renewing can't create one.
+ */
+export function needsRenewal(raw: string | null, now = Date.now()): boolean {
+  if (!raw) return false;
+  try {
+    const oauth = JSON.parse(raw)?.claudeAiOauth;
+    if (typeof oauth?.refreshToken !== "string" || !oauth.refreshToken) return false;
+    return typeof oauth.expiresAt === "number" && oauth.expiresAt - now <= RENEW_MARGIN_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** Returns the access token, or null if there is no usable login. The worker renews it through the `claude` CLI. */
 export function parseCredentials(raw: string, now = Date.now()): string | null {
   try {
     const oauth = JSON.parse(raw)?.claudeAiOauth;

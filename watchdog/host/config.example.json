@@ -1,11 +1,9 @@
 {
   "companyId": "<your Paperclip company ID>",
   "repos": [
-    { "name": "owner/repo" },
-    { "name": "owner/other", "forgejo": "owner/other", "githubMirror": "owner/other" }
+    { "name": "owner/repo", "forgejo": "owner/repo", "githubMirror": "owner/repo" }
   ],
   "ghConfigDir": "~/.config/gh",
   "forgejo": { "url": "http://localhost:3000", "tokenFile": "~/.config/forgejo-read-token" },
-  "claudeBin": "~/.local/bin/claude",
   "restartCommand": ["bash", "-lc", "paperclip-stop && paperclip-start"]
 }

@@ -13,7 +13,6 @@ import {
 } from "../graph.js";
 
 const API = "/api/plugins/nevysha.dependency-graph/api/graph";
-const WAKE_API = "/api/plugins/nevysha.dependency-graph/api/tasks";
 const PREFS_KEY = "nevysha.dependency-graph.prefs";
 const PAGE = "/dependencies";
 
@@ -46,8 +45,7 @@ function useGraphData(companyId: string | null, intervalMs: number) {
       .catch((err: Error) => { if (live) setError(err.message); });
     return () => { live = false; };
   }, [companyId, tick]);
-  const reload = useCallback(() => setTick((n) => n + 1), []);
-  return { data, error, reload };
+  return { data, error };
 }
 
 type Direction = "LR" | "TB";
@@ -94,7 +92,7 @@ function since(iso: string | null | undefined): string {
   if (m < 2160) return `${Math.round(m / 60)} h`;
   return `${Math.round(m / 1440)} days`;
 }
-const WAIT_KIND: Record<Wait["kind"], string> = { job: "Job", ci: "CI" };
+const WAIT_KIND: Record<Wait["kind"], string> = { job: "Job" };
 
 // ---------------------------------------------------------------- styles
 
@@ -188,8 +186,8 @@ const CSS = `
 `;
 
 const stColor = (status: string) => `var(--dg-${STATUS_LABEL[status] ? status : "backlog"})`;
-/** Jobs read as work in progress; CI as review; a quiet job (log not written for a while) as a warning. */
-const waitColor = (w: Wait) => (isQuiet(w) ? "var(--dg-warn)" : w.kind === "ci" ? "var(--dg-in_review)" : "var(--dg-in_progress)");
+/** Jobs read as work in progress; a quiet job (log not written for a while) as a warning. */
+const waitColor = (w: Wait) => (isQuiet(w) ? "var(--dg-warn)" : "var(--dg-in_progress)");
 
 // ---------------------------------------------------------------- layout
 
@@ -351,7 +349,7 @@ function Badges({ info }: { info: NodeInfo }) {
       {info.staleWait ? <span className="dg-badge warn" title="Still blocked, but every blocker is closed">Stale</span> : null}
       {info.working ? <span className="dg-badge head" title={workingTitle(info)}>Agent working</span> : null}
       {info.needsPerson ? <span className="dg-badge head" title="Blocked until a person acts; nothing else is running for it">Needs you</span> : null}
-      {info.unattended ? <span className="dg-badge warn" title="Blocked, but it waits on no open task, no running job, no CI and no person: nothing will wake it">No wake-up</span> : null}
+      {info.unattended ? <span className="dg-badge warn" title="Blocked, but it waits on no open task, no running job and no person: nothing will wake it">No wake-up</span> : null}
       {info.isHead && !info.inCycle ? <span className="dg-badge head" title={`Open, waiting on no other task, and holding up ${plural(info.holdingUp, "open task")}`}>Holds up {info.holdingUp}</span> : null}
     </>
   );
@@ -368,54 +366,13 @@ function TaskItem({ info, onPick, note }: { info: NodeInfo; onPick: (id: string)
   );
 }
 
-/** For a blocked task nothing will wake (or a stale one): move it to To do, explain why on it, and wake its assignee. */
-function WakeButton({ info, companyId, onDone }: { info: NodeInfo; companyId: string; onDone: () => void }) {
-  const [state, setState] = useState<"idle" | "confirm" | "busy">("idle");
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => { setState("idle"); setMsg(null); }, [info.task.id]);
-  if (!info.task.assigneeName) return <p className="dg-note" style={{ marginTop: 6 }}>No agent is assigned to it, so there&apos;s nobody to wake.</p>;
-  const wake = async () => {
-    setState("busy");
-    try {
-      const res = await fetch(`${WAKE_API}/${info.task.id}/wake`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ companyId }),
-      });
-      const json = await res.json().catch(() => null) as { error?: string; queued?: boolean } | null;
-      if (!res.ok) throw new Error(json?.error ?? `Request failed (${res.status})`);
-      setMsg({ ok: true, text: json?.queued
-        ? `Moved to To do and woke ${info.task.assigneeName}. A comment on the task says why.`
-        : `Moved to To do with a comment saying why. ${info.task.assigneeName} already had a run queued.` });
-      onDone();
-    } catch (err) {
-      setMsg({ ok: false, text: (err as Error).message });
-    }
-    setState("idle");
-  };
-  if (msg) return <p className={msg.ok ? "dg-note" : "dg-err"} style={{ marginTop: 6, fontSize: 12.5 }} role="status">{msg.text}</p>;
-  return state === "confirm" ? (
-    <div style={{ marginTop: 8 }}>
-      <p className="dg-note">This moves it to To do, posts a comment explaining it was woken, and starts a run for {info.task.assigneeName}.</p>
-      <div className="dg-row" style={{ marginTop: 6 }}>
-        <button type="button" className="dg-btn" onClick={wake}>Yes, wake it</button>
-        <button type="button" className="dg-btn" onClick={() => setState("idle")}>Cancel</button>
-      </div>
-    </div>
-  ) : (
-    <div className="dg-row" style={{ marginTop: 8 }}>
-      <button type="button" className="dg-btn" disabled={state === "busy"} onClick={() => setState("confirm")}>
-        {state === "busy" ? "Waking…" : `Wake it (${info.task.assigneeName})`}
-      </button>
-    </div>
-  );
-}
-
 function WaitDetails({ w }: { w: Wait }) {
   const quiet = isQuiet(w);
   return (
     <dl className="dg-kv" style={{ marginTop: 8 }}>
       <dt>{WAIT_KIND[w.kind]}</dt><dd className="dg-mono">{w.title}</dd>
-      {w.since ? <><dt>{w.kind === "job" ? "Running for" : "Waiting for"}</dt><dd>{since(w.since)}</dd></> : null}
-      {w.detail ? <><dt>{w.kind === "job" ? "Last line" : "Note"}</dt><dd className="dg-mono">{w.detail}</dd></> : null}
+      {w.since ? <><dt>Running for</dt><dd>{since(w.since)}</dd></> : null}
+      {w.detail ? <><dt>Last line</dt><dd className="dg-mono">{w.detail}</dd></> : null}
       {w.logUpdatedAt ? <><dt>Last output</dt><dd>{ago(w.logUpdatedAt)}{quiet ? ": quiet for a while, it may be stuck" : ""}</dd></> : null}
       {w.log ? <><dt>Log</dt><dd className="dg-mono">{w.log}</dd></> : null}
       {w.pid ? <><dt>Process</dt><dd>{w.pid}</dd></> : null}
@@ -423,8 +380,8 @@ function WaitDetails({ w }: { w: Wait }) {
   );
 }
 
-/** What a blocked task waits for: its unblock note, running jobs and CI waits, and a warning when nothing is coming. */
-function WaitingFor({ info, companyId, onChanged }: { info: NodeInfo; companyId: string; onChanged: () => void }) {
+/** What a blocked task waits for: its unblock note, running jobs, and a warning when nothing is coming. */
+function WaitingFor({ info }: { info: NodeInfo }) {
   const t = info.task;
   const u = t.unblock;
   if (t.status !== "blocked" && info.waits.length === 0) return null;
@@ -436,9 +393,8 @@ function WaitingFor({ info, companyId, onChanged }: { info: NodeInfo; companyId:
       {info.needsPerson ? <div className="dg-warnbox" style={{ marginTop: 8 }}>Nothing is running for it: it moves when you act.</div> : null}
       {info.unattended ? (
         <div className="dg-warnbox" style={{ marginTop: 8 }}>
-          Nothing will wake it: no open task it waits on, no running job and no CI wait. If its note talks about a job,
-          the job ended without reporting back. Check the task, then wake it.
-          <WakeButton info={info} companyId={companyId} onDone={onChanged} />
+          Nothing will wake it: no open task it waits on and no running job. If its note talks about a job,
+          the job ended without reporting back. Open the task to check it, then move it to To do or comment on it to wake its agent.
         </div>
       ) : null}
       {!u && !info.waits.length && !info.unattended && !info.needsPerson ? <p className="dg-note">Only the tasks below.</p> : null}
@@ -458,15 +414,14 @@ function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; vis
   const unattended = all.filter((i) => i.unattended);
   const waits = all.filter((i) => !isClosed(i.task.status)).flatMap((i) => i.waits.map((w) => ({ w, info: i })));
   const quiet = waits.filter(({ w }) => isQuiet(w));
-  const jobs = waits.filter(({ w }) => w.kind === "job").length;
   const shown = [...visible].filter((id) => !isClosed(analysis.get(id)!.task.status)).length;
   return (
     <>
       <div>
         <h2>Needs attention</h2>
         <p className="dg-note" style={{ marginTop: 4 }}>
-          {plural(waiting, "open task")} waiting on another task, {plural(jobs, "background job")} running,{" "}
-          {plural(waits.length - jobs, "CI wait")}. {plural(shown, "open task")} in this view.
+          {plural(waiting, "open task")} waiting on another task, {plural(waits.length, "background job")} running.{" "}
+          {plural(shown, "open task")} in this view.
           Select a task to see what it waits on and what waits on it.
         </p>
       </div>
@@ -482,7 +437,7 @@ function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; vis
         {unattended.length === 0 ? <p className="dg-note">None.</p> : (
           <>
             <div className="dg-list">{unattended.map((i) => <TaskItem key={i.task.id} info={i} onPick={onPick} note={ago(i.task.updatedAt)} />)}</div>
-            <p className="dg-note">No open task it waits on, no running job, no CI wait, and its note doesn&apos;t name you. Often a background job that died. Select one to read its note and wake it.</p>
+            <p className="dg-note">No open task it waits on, no running job, and its note doesn&apos;t name you. Often a background job that died. Select one to read its note.</p>
           </>
         )}
       </section>
@@ -522,8 +477,8 @@ function AttentionPanel({ analysis, visible, onPick }: { analysis: Analysis; vis
   );
 }
 
-function TaskPanel({ info, analysis, focused, companyId, onChanged, onPick, onFocus, onClose }: {
-  info: NodeInfo; analysis: Analysis; focused: boolean; companyId: string; onChanged: () => void;
+function TaskPanel({ info, analysis, focused, onPick, onFocus, onClose }: {
+  info: NodeInfo; analysis: Analysis; focused: boolean;
   onPick: (id: string) => void; onFocus: (id: string | null) => void; onClose: () => void;
 }) {
   const nav = useHostNavigation();
@@ -554,11 +509,11 @@ function TaskPanel({ info, analysis, focused, companyId, onChanged, onPick, onFo
       {info.staleWait && !isClosed(t.status) ? (
         <div className="dg-warnbox">
           Still marked blocked, but every task it waits on is closed. Paperclip should have woken it.
-          {info.waits.length === 0 ? <WakeButton info={info} companyId={companyId} onDone={onChanged} /> : null}
+          {info.waits.length === 0 ? " Open the task and move it to To do, or comment on it, to wake its agent." : null}
         </div>
       ) : null}
       {info.inCycle ? <div className="dg-warnbox">Part of a loop: it waits, through other tasks, on something that waits on it.</div> : null}
-      <WaitingFor info={info} companyId={companyId} onChanged={onChanged} />
+      <WaitingFor info={info} />
       <dl className="dg-kv">
         <dt>Assignee</dt><dd>{t.assigneeName ?? (t.assignedToUser ? "A board user" : <span className="dg-muted">Nobody</span>)}</dd>
         {t.priority ? <><dt>Priority</dt><dd>{t.priority}</dd></> : null}
@@ -590,7 +545,7 @@ function TaskPanel({ info, analysis, focused, companyId, onChanged, onPick, onFo
 export function DependencyGraphPage({ context }: PluginPageProps) {
   const { search } = useHostLocation();
   const nav = useHostNavigation();
-  const { data, error, reload } = useGraphData(context.companyId, 30_000);
+  const { data, error } = useGraphData(context.companyId, 30_000);
   const [prefs, setPrefs] = usePrefs();
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -662,7 +617,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
         <div>
           <h1>Dependencies</h1>
           <p className="dg-sub">
-            Which tasks wait on which, and on what outside Paperclip: dashed boxes are running background jobs and CI waits.
+            Which tasks wait on which, and on what outside Paperclip: dashed boxes are running background jobs.
             An arrow goes from a blocker to the task it blocks, so work flows {prefs.dir === "LR" ? "left to right" : "top to bottom"}.
             Hover a task to light up its whole chain.
           </p>
@@ -707,7 +662,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
             {statusesShown.map((s) => <span key={s}><i className="dg-sw" style={{ background: stColor(s) }} />{statusLabel(s)}</span>)}
             <span><svg width="26" height="8" aria-hidden><line x1="0" y1="4" x2="26" y2="4" stroke="var(--muted-foreground)" strokeWidth="1.5" /></svg>Blocks</span>
             <span><svg width="26" height="8" aria-hidden><line x1="0" y1="4" x2="26" y2="4" stroke="var(--muted-foreground)" strokeOpacity=".3" strokeWidth="1.5" /></svg>Blocker finished</span>
-            <span><i className="dg-sw" style={{ border: "1px dashed var(--muted-foreground)", background: "transparent" }} />Job or CI it waits on</span>
+            <span><i className="dg-sw" style={{ border: "1px dashed var(--muted-foreground)", background: "transparent" }} />Job it waits on</span>
             {prefs.parentLinks ? <span><svg width="26" height="8" aria-hidden><line x1="0" y1="4" x2="26" y2="4" stroke="var(--muted-foreground)" strokeOpacity=".6" strokeDasharray="5 4" strokeWidth="1.5" /></svg>Parent of</span> : null}
           </div>
           <div className="dg-main">
@@ -760,12 +715,12 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
                           onFocus={() => setHovered(id)} onBlur={() => setHovered(null)}>
                           <div className="dg-top">
                             <span className="dg-kind">{WAIT_KIND[w.kind]}</span>
-                            <span>{w.kind === "job" ? "running" : "waiting"} {since(w.since)}</span>
+                            <span>running {since(w.since)}</span>
                             <span className="dg-push" />
                             {quiet ? <span className="dg-badge warn" title="Its log hasn't changed for 30 minutes or more">Quiet</span> : null}
                           </div>
                           <div className="dg-title">{w.title}</div>
-                          <div className="dg-detail">{w.detail ?? (w.kind === "ci" ? "Wakes the task when CI finishes" : "Wakes the task when it ends")}</div>
+                          <div className="dg-detail">{w.detail ?? "Wakes the task when it ends"}</div>
                         </div>
                       );
                     }
@@ -804,7 +759,6 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
             <aside className="dg-panel" aria-label={selectedInfo ? "Task details" : "Needs attention"}>
               {selectedInfo
                 ? <TaskPanel info={selectedInfo} analysis={analysis} focused={focusTask?.id === selectedInfo.task.id}
-                    companyId={context.companyId ?? ""} onChanged={reload}
                     onPick={pick} onFocus={setFocus} onClose={() => setSelected(null)} />
                 : <AttentionPanel analysis={analysis} visible={visible} onPick={pick} />}
             </aside>
@@ -812,7 +766,7 @@ export function DependencyGraphPage({ context }: PluginPageProps) {
           <p className="dg-note" style={{ margin: 0 }}>
             Drag to move, scroll to zoom. Click a task for details, double-click to show only its chain. Links come from each task&apos;s
             &ldquo;Blocked by&rdquo; list; a finished or cancelled blocker no longer holds anything up. Jobs are processes that will run
-            paperclip-notify for a task; CI waits come from paperclip-wait.
+            paperclip-notify for a task.
           </p>
         </>
       ) : null}

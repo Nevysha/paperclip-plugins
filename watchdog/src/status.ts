@@ -13,7 +13,6 @@ export type WatchdogStatusFile = {
   notes?: string[];
   recentActions?: WatchdogAction[];
 };
-export type Wait = { id: string; issue: string; kind: "ci"; repo: string; ref: string; createdAt: string; note?: string };
 export type Level = "ok" | "acting" | "alert" | "paused" | "stale" | "missing";
 export type StatusView = {
   level: Level;
@@ -23,7 +22,6 @@ export type StatusView = {
   paused: boolean;
   notes: string[];
   recentActions: WatchdogAction[];
-  waits: Wait[];
 };
 
 /** The timer runs every 3 minutes; past this, it has stopped. */
@@ -41,29 +39,14 @@ export function parseStatus(text: string | null): WatchdogStatusFile | null {
   }
 }
 
-export function parseWaits(text: string | null): Wait[] {
-  if (!text) return [];
-  try {
-    const value = JSON.parse(text) as { waits?: unknown };
-    return Array.isArray(value?.waits)
-      ? value.waits.filter((w): w is Wait =>
-          !!w && typeof w === "object" && typeof (w as Wait).id === "string" && typeof (w as Wait).issue === "string"
-          && typeof (w as Wait).ref === "string" && typeof (w as Wait).createdAt === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-export function summarize(input: { status: WatchdogStatusFile | null; paused: boolean; waits: Wait[]; now: number }): StatusView {
-  const { status, paused, waits, now } = input;
+export function summarize(input: { status: WatchdogStatusFile | null; paused: boolean; now: number }): StatusView {
+  const { status, paused, now } = input;
   const recentActions = (status?.recentActions ?? []).slice(-10).reverse();
   const base = {
     lastTickAt: status?.lastTickAt ?? null,
     paused,
     notes: status?.notes ?? [],
     recentActions,
-    waits,
   };
   if (paused) {
     return { ...base, level: "paused", label: "Paused", detail: "The watchdog is paused. Stalled work won't be restarted until you resume it." };

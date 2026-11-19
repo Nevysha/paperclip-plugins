@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile, symlink, rm, utimes } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { jobCommand, parseStat, readRegisteredWaits, scanJobs } from "../src/waits.js";
+import { jobCommand, parseStat, scanJobs } from "../src/waits.js";
 
 const dirs: string[] = [];
 const temp = async () => { const d = await mkdtemp(join(tmpdir(), "dg-waits-")); dirs.push(d); return d; };
@@ -66,17 +66,5 @@ describe("scanJobs", () => {
 
   it("returns nothing when /proc can't be read", async () => {
     expect(await scanJobs("/no/such/proc")).toEqual([]);
-  });
-});
-
-describe("readRegisteredWaits", () => {
-  it("reads valid waits and ignores a missing or broken file", async () => {
-    const root = await temp();
-    const file = join(root, "waits.json");
-    expect(await readRegisteredWaits(file)).toEqual([]);
-    await writeFile(file, JSON.stringify({ waits: [{ id: "a", issue: "ABC-1", kind: "ci", ref: "main", createdAt: "x" }, { id: 3 }] }));
-    expect(await readRegisteredWaits(file)).toHaveLength(1);
-    await writeFile(file, "{not json");
-    expect(await readRegisteredWaits(file)).toEqual([]);
   });
 });
