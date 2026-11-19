@@ -37,6 +37,7 @@ Some plugins have parts that run outside Paperclip. They have their own checks:
 - Fork the repo if you don't have write access.
 - Keep one topic per pull request. Two unrelated fixes are two pull requests.
 - Rebase on `main` before asking for a review, and again if `main` moved and there's a conflict.
+- A pull request needs one approving review before it can merge. Pushing new commits dismisses earlier approvals, so the last version is the one reviewed. `main` can't be pushed to directly or force-pushed.
 
 ### Commit messages
 
