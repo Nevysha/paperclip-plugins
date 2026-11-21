@@ -208,7 +208,8 @@ function tick(ctx: PluginContext, change: Change = {}) {
 }
 
 async function routineViews(ctx: PluginContext, companyId: string) {
-  const [config, flags] = await Promise.all([readConfig(ctx, companyId), readFlags(ctx, companyId)]);
+  const [config, flags] = await Promise.all([readConfig(ctx, companyId).catch(() => null), readFlags(ctx, companyId)]);
+  if (!config) return [];
   return Promise.all(managedRoutines(config).map(async ({ key }) => {
     const resolved = await ctx.routines.managed.get(key, companyId);
     return {
