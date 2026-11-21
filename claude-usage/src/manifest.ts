@@ -19,19 +19,21 @@ const manifest: PaperclipPluginManifestV1 = {
     type: "object",
     properties: {
       projectId: { type: "string", title: "Project ID", description: "Project the managed routines file their tasks in." },
-      routines: {
-        type: "array",
-        title: "Managed routines",
-        description: "Routines to create in this company and gate on usage. A routine not listed here is never created.",
-        items: {
-          type: "object",
-          properties: {
-            key: ROUTINES.length ? { type: "string", enum: ROUTINES.map((r) => r.key) } : { type: "string" },
-            assigneeAgentId: { type: "string", title: "Assignee agent ID" },
+      ...(ROUTINES.length ? {
+        routines: {
+          type: "array",
+          title: "Managed routines",
+          description: "Routines to create in this company and gate on usage. A routine not listed here is never created.",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string", enum: ROUTINES.map((r) => r.key) },
+              assigneeAgentId: { type: "string", title: "Assignee agent ID" },
+            },
+            required: ["key", "assigneeAgentId"],
           },
-          required: ["key", "assigneeAgentId"],
         },
-      },
+      } : {}),
     },
   },
   routines: ROUTINES.map((r) => ({

@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { definePlugin, runWorker, type PluginContext } from "@paperclipai/plugin-sdk";
 import {
-  DEFAULT_LIMITS, ROUTINES, claimsLegacyFlags, decide, isOverLimit, isRoutineKey, parseGateConfig, takeLegacyFlags, toFlags, toRelease,
-  type GateConfig, type GateLimits, type RoutineFlags, weekLimit,
+  DEFAULT_LIMITS, ROUTINES, claimsLegacyFlags, decide, isOverLimit, isRoutineKey, managedRoutines, parseGateConfig, takeLegacyFlags, toFlags,
+  toRelease, type GateConfig, type GateLimits, type RoutineFlags, warnsForMissingSetting, weekLimit,
 } from "./gate.js";
 import { parseCredentials, toUsageFile, toWindows, type UsageResult } from "./usage.js";
 
@@ -17,6 +17,14 @@ const SIGNED_OUT = "Run `claude` on this machine to sign in or refresh your logi
 
 let lastGood: Extract<UsageResult, { status: "ok" }> | null = null;
 let cached: { expires: number; result: Promise<UsageResult> } | null = null;
+
+// Checks run every 5 minutes, so each problem is logged once until it clears.
+const warned = new Set<string>();
+function warnOnce(ctx: PluginContext, key: string, message: string, meta: Record<string, unknown>) {
+  if (warned.has(key)) return;
+  warned.add(key);
+  ctx.logger.warn(message, meta);
+}
 
 async function readToken(): Promise<string | null> {
   const dir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
@@ -60,10 +68,10 @@ async function readLimits(ctx: PluginContext): Promise<GateLimits> {
   return limits;
 }
 
-async function readFlags(ctx: PluginContext, companyId: string, hasRoutines: boolean, claimLegacy = false): Promise<RoutineFlags> {
+async function readFlags(ctx: PluginContext, companyId: string, claimLegacy = false): Promise<RoutineFlags> {
   const saved = await ctx.state.get(flagsKey(companyId));
   if (saved) return toFlags(saved);
-  if (!claimsLegacyFlags(companyId, hasRoutines)) return toFlags(null);
+  if (!claimsLegacyFlags(companyId)) return toFlags(null);
   const legacy = takeLegacyFlags(await ctx.state.get(LIMITS_KEY));
   if (!legacy.flags) return toFlags(null);
   if (claimLegacy) {
@@ -77,9 +85,13 @@ async function readConfig(ctx: PluginContext, companyId: string): Promise<GateCo
   return parseGateConfig(await ctx.config.get(companyId), companyId);
 }
 
+const optionalCompany = (params: Record<string, unknown>) =>
+  typeof params.companyId === "string" && params.companyId ? params.companyId : null;
+
 function requireCompany(params: Record<string, unknown>): string {
-  if (typeof params.companyId !== "string" || !params.companyId) throw new Error("Open this from a company");
-  return params.companyId;
+  const companyId = optionalCompany(params);
+  if (!companyId) throw new Error("Open this from a company");
+  return companyId;
 }
 
 // Lets agents check usage without touching the Claude login or the local API.
@@ -97,12 +109,22 @@ async function applyGate(ctx: PluginContext, companyId: string, result: UsageRes
   try {
     config = await readConfig(ctx, companyId);
   } catch (err) {
-    ctx.logger.debug("No settings readable for a company, so its routines aren't gated", { companyId, error: String(err) });
+    const message = "No settings readable for a company, so its routines aren't gated";
+    const meta = { companyId, error: String(err) };
+    if (warnsForMissingSetting(companyId)) warnOnce(ctx, `settings:${companyId}`, message, meta);
+    else ctx.logger.debug(message, meta);
     return;
   }
-  const flags = await readFlags(ctx, companyId, config.routines.length > 0, true);
+  warned.delete(`settings:${companyId}`);
+  const routines = managedRoutines(config);
+  if (config.routines.length && !routines.length) {
+    warnOnce(ctx, `project:${companyId}`, "A company lists routines but no projectId, so none of them are managed", { companyId });
+  } else {
+    warned.delete(`project:${companyId}`);
+  }
+  const flags = await readFlags(ctx, companyId, true);
   const pausedByGate = { ...flags.pausedByGate };
-  const release = toRelease(pausedByGate, config.routines.map((r) => r.key));
+  const release = toRelease(pausedByGate, routines.map((r) => r.key));
   for (const key of release) {
     try {
       const resolved = await ctx.routines.managed.get(key, companyId);
@@ -112,7 +134,7 @@ async function applyGate(ctx: PluginContext, companyId: string, result: UsageRes
       ctx.logger.warn("Usage gate failed to resume a routine it no longer manages", { companyId, routine: key, error: String(err) });
     }
   }
-  if (!config.routines.length) {
+  if (!routines.length) {
     if (release.length) await ctx.state.set(flagsKey(companyId), { ...flags, pausedByGate });
     return;
   }
@@ -122,7 +144,7 @@ async function applyGate(ctx: PluginContext, companyId: string, result: UsageRes
   const percent = (key: string) => windows.find((w) => w.key === key)?.usedPercent ?? null;
   const over = known && isOverLimit({ session: percent("session"), week: percent("week") }, limits.pauseAtPercent, weekLimit(limits));
 
-  for (const routine of config.routines) {
+  for (const routine of routines) {
     try {
       const resolved = await ctx.routines.managed.reconcile(routine.key, companyId, {
         assigneeAgentId: routine.assigneeAgentId,
@@ -142,10 +164,15 @@ async function applyGate(ctx: PluginContext, companyId: string, result: UsageRes
 
 async function companyIds(ctx: PluginContext): Promise<string[]> {
   const ids: string[] = [];
-  for (let offset = 0; ; offset += 100) {
-    const page = await ctx.companies.list({ limit: 100, offset });
-    ids.push(...page.map((c) => c.id));
-    if (page.length < 100) return ids;
+  try {
+    for (let offset = 0; ; offset += 100) {
+      const page = await ctx.companies.list({ limit: 100, offset });
+      ids.push(...page.map((c) => c.id));
+      if (page.length < 100) return ids;
+    }
+  } catch (err) {
+    ctx.logger.warn("Listing the companies failed, so no routines are gated this round", { error: String(err) });
+    return [];
   }
 }
 
@@ -166,7 +193,7 @@ function tick(ctx: PluginContext, change: Change = {}) {
     }
     if (change.flags) {
       const { companyId, apply } = change.flags;
-      await ctx.state.set(flagsKey(companyId), apply(await readFlags(ctx, companyId, true, true)));
+      await ctx.state.set(flagsKey(companyId), apply(await readFlags(ctx, companyId, true)));
     }
     const result = await getUsage();
     await publishUsage(result, limits).catch((err) => ctx.logger.warn("Writing the usage file failed", { error: String(err) }));
@@ -180,10 +207,9 @@ function tick(ctx: PluginContext, change: Change = {}) {
   return run;
 }
 
-async function gateView(ctx: PluginContext, companyId: string) {
-  const [limits, config] = await Promise.all([readLimits(ctx), readConfig(ctx, companyId)]);
-  const flags = await readFlags(ctx, companyId, config.routines.length > 0);
-  const routines = await Promise.all(config.routines.map(async ({ key }) => {
+async function routineViews(ctx: PluginContext, companyId: string) {
+  const [config, flags] = await Promise.all([readConfig(ctx, companyId), readFlags(ctx, companyId)]);
+  return Promise.all(managedRoutines(config).map(async ({ key }) => {
     const resolved = await ctx.routines.managed.get(key, companyId);
     return {
       key,
@@ -193,6 +219,11 @@ async function gateView(ctx: PluginContext, companyId: string) {
       pausedByGate: flags.pausedByGate[key] === true,
     };
   }));
+}
+
+/** The limits are instance-wide, so they show without a company; the routines need one. */
+async function gateView(ctx: PluginContext, companyId: string | null) {
+  const [limits, routines] = await Promise.all([readLimits(ctx), companyId ? routineViews(ctx, companyId) : []]);
   return { pauseAtPercent: limits.pauseAtPercent, weekPauseAtPercent: weekLimit(limits), routines };
 }
 
@@ -206,24 +237,24 @@ function validPercent(percent: unknown): number {
 const plugin = definePlugin({
   async setup(ctx) {
     ctx.data.register("usage", getUsage);
-    ctx.data.register("gate", async (params) => gateView(ctx, requireCompany(params)));
+    ctx.data.register("gate", async (params) => gateView(ctx, optionalCompany(params)));
 
     ctx.actions.register("setRoutineEnabled", async (params) => {
       const companyId = requireCompany(params);
       const { key, enabled } = params;
-      const configured = (await readConfig(ctx, companyId)).routines.some((r) => r.key === key);
+      const configured = managedRoutines(await readConfig(ctx, companyId)).some((r) => r.key === key);
       if (!isRoutineKey(key) || !configured || typeof enabled !== "boolean") throw new Error("Unknown routine or value");
       await tick(ctx, { flags: { companyId, apply: (f) => ({ ...f, enabled: { ...f.enabled, [key]: enabled } }) } });
       return gateView(ctx, companyId);
     });
     ctx.actions.register("setPauseAtPercent", async (params) => {
-      const companyId = requireCompany(params);
+      const companyId = optionalCompany(params);
       const percent = validPercent(params.percent);
       await tick(ctx, { limits: (l) => ({ ...l, pauseAtPercent: percent }) });
       return gateView(ctx, companyId);
     });
     ctx.actions.register("setWeekPauseAtPercent", async (params) => {
-      const companyId = requireCompany(params);
+      const companyId = optionalCompany(params);
       const percent = validPercent(params.percent);
       await tick(ctx, { limits: (l) => ({ ...l, weekPauseAtPercent: percent }) });
       return gateView(ctx, companyId);

@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const testSetup = vi.hoisted(() => {
@@ -7,13 +11,17 @@ const testSetup = vi.hoisted(() => {
     companyId: "c-setup",
     projectId: "p-setup",
     timezone: "UTC",
+    warnForMissingCompanySetting: false,
     routines: [routine("po-review", "a-po", true), routine("safety-review", "a-safety", false)],
   };
   return { value };
 });
 vi.mock("../src/setup.generated.js", () => ({ get default() { return testSetup.value; } }));
 
-import { DEFAULT_FLAGS, ROUTINES, claimsLegacyFlags, decide, isOverLimit, parseGateConfig, takeLegacyFlags, toFlags, toRelease } from "../src/gate.js";
+import {
+  DEFAULT_FLAGS, ROUTINES, claimsLegacyFlags, decide, isOverLimit, managedRoutines, parseGateConfig, takeLegacyFlags, toFlags, toRelease,
+  warnsForMissingSetting,
+} from "../src/gate.js";
 import manifest from "../src/manifest.js";
 import { parseCredentials, toUsageFile, toWindows } from "../src/usage.js";
 
@@ -31,18 +39,19 @@ describe("manifest config", () => {
 });
 
 describe("without a setup.json company", () => {
-  it("offers any key, declares no routines and gives the saved checkboxes to the first company with routines", async () => {
+  it("offers no routines setting, declares no routines and gives the saved checkboxes to no company", async () => {
     vi.resetModules();
     const saved = testSetup.value;
-    testSetup.value = { companyId: "", projectId: "", timezone: "UTC", routines: [] };
+    testSetup.value = { companyId: "", projectId: "", timezone: "UTC", warnForMissingCompanySetting: false, routines: [] };
     try {
       const empty = (await import("../src/manifest.js")).default;
-      const schema = empty.instanceConfigSchema as { properties: { routines: { items: { properties: { key: Record<string, unknown> } } } } };
-      expect(schema.properties.routines.items.properties.key).toEqual({ type: "string" });
+      const schema = empty.instanceConfigSchema as { properties: Record<string, unknown> };
+      expect(Object.keys(schema.properties)).toEqual(["projectId"]);
       expect(empty.routines).toEqual([]);
       const gate = await import("../src/gate.js");
-      expect(gate.claimsLegacyFlags("c-any", true)).toBe(true);
-      expect(gate.claimsLegacyFlags("c-any", false)).toBe(false);
+      expect(gate.claimsLegacyFlags("c-any")).toBe(false);
+      expect(gate.claimsLegacyFlags("")).toBe(false);
+      expect(gate.warnsForMissingSetting("c-any")).toBe(false);
     } finally {
       testSetup.value = saved;
       vi.resetModules();
@@ -89,8 +98,65 @@ describe("parseGateConfig", () => {
 
 describe("claimsLegacyFlags", () => {
   it("gives the saved checkboxes to the setup.json company only", () => {
-    expect(claimsLegacyFlags("c-setup", false)).toBe(true);
-    expect(claimsLegacyFlags("c-other", true)).toBe(false);
+    expect(claimsLegacyFlags("c-setup")).toBe(true);
+    expect(claimsLegacyFlags("c-other")).toBe(false);
+  });
+});
+
+describe("warnsForMissingSetting", () => {
+  it("warns for the setup.json company, and for every company when setup.json asks", async () => {
+    expect(warnsForMissingSetting("c-setup")).toBe(true);
+    expect(warnsForMissingSetting("c-other")).toBe(false);
+    vi.resetModules();
+    const saved = testSetup.value;
+    testSetup.value = { ...saved, warnForMissingCompanySetting: true };
+    try {
+      expect((await import("../src/gate.js")).warnsForMissingSetting("c-other")).toBe(true);
+    } finally {
+      testSetup.value = saved;
+      vi.resetModules();
+    }
+  });
+});
+
+describe("managedRoutines", () => {
+  const routines = [{ key: "po-review", assigneeAgentId: "a1" }];
+  it("manages the listed routines when a project is set", () => {
+    expect(managedRoutines({ projectId: "p1", routines })).toEqual(routines);
+  });
+  it("manages none without a project", () => {
+    expect(managedRoutines({ projectId: null, routines })).toEqual([]);
+    expect(parseGateConfig({ routines: [{ key: "po-review", assigneeAgentId: "a1" }] }, "c-other").projectId).toBeNull();
+  });
+});
+
+describe("scripts/setup.mjs", () => {
+  const routine = { key: "weekly-review", title: "Weekly review", description: "d", label: "Every Monday", cron: "0 9 * * 1", defaultEnabled: true };
+  function runSetup(setup: unknown) {
+    const root = mkdtempSync(join(tmpdir(), "claude-usage-setup-"));
+    try {
+      mkdirSync(join(root, "scripts"));
+      mkdirSync(join(root, "src"));
+      copyFileSync(join(__dirname, "../scripts/setup.mjs"), join(root, "scripts/setup.mjs"));
+      writeFileSync(join(root, "setup.json"), JSON.stringify(setup));
+      const run = spawnSync(process.execPath, [join(root, "scripts/setup.mjs")], { encoding: "utf8" });
+      const generated = run.status === 0 ? readFileSync(join(root, "src/setup.generated.ts"), "utf8") : "";
+      return { status: run.status, stderr: run.stderr, generated };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  it("builds routines with no company, project or assignee, for companies that set their own", () => {
+    const run = runSetup({ companyId: "", projectId: "", routines: [{ ...routine, assigneeAgentId: "" }] });
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.generated).toContain('"key": "weekly-review"');
+    expect(run.generated).toContain('"warnForMissingCompanySetting": false');
+  });
+  it("rejects a routine without a title or an assignee field, and a non-boolean warning switch", () => {
+    expect(runSetup({ companyId: "", projectId: "", routines: [{ ...routine, title: "", assigneeAgentId: "" }] }).stderr).toContain('"title"');
+    expect(runSetup({ companyId: "", projectId: "", routines: [routine] }).stderr).toContain('"assigneeAgentId"');
+    expect(runSetup({ companyId: "", projectId: "", routines: [], warnForMissingCompanySetting: "yes" }).status).toBe(1);
   });
 });
 

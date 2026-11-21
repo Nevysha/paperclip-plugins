@@ -38,9 +38,13 @@ export function takeLegacyFlags(instance: unknown): { flags: RoutineFlags | null
   return { flags, rest };
 }
 
-/** The setup.json company takes over the checkboxes saved before 0.4.0; without one, the first company with routines does. */
-export const claimsLegacyFlags = (companyId: string, hasRoutines: boolean) =>
-  setup.companyId ? setup.companyId === companyId : hasRoutines;
+const isSetupCompany = (companyId: string) => Boolean(setup.companyId) && setup.companyId === companyId;
+
+/** Only the setup.json company takes over the checkboxes saved before 0.4.0. */
+export const claimsLegacyFlags = (companyId: string) => isSetupCompany(companyId);
+
+/** A company whose settings can't be read is ungated, so this one warns instead of logging at debug. */
+export const warnsForMissingSetting = (companyId: string) => setup.warnForMissingCompanySetting === true || isSetupCompany(companyId);
 
 /** Routines the gate paused that the company no longer lists, so the gate resumes them and lets go. */
 export function toRelease(pausedByGate: Record<string, boolean>, configured: readonly string[]): RoutineKey[] {
@@ -56,7 +60,7 @@ const nonBlank = (value: unknown) => (typeof value === "string" && value.trim() 
 
 /** The setup.json values, which apply only to the setup.json company. */
 function setupDefaults(companyId: string): GateConfig | null {
-  if (!setup.companyId || setup.companyId !== companyId) return null;
+  if (!isSetupCompany(companyId)) return null;
   const routines = setup.routines.flatMap((r) => {
     const assigneeAgentId = nonBlank(r.assigneeAgentId);
     return isRoutineKey(r.key) && assigneeAgentId ? [{ key: r.key, assigneeAgentId }] : [];
@@ -79,6 +83,9 @@ export function parseGateConfig(raw: unknown, companyId: string): GateConfig {
   }
   return { projectId, routines };
 }
+
+/** Routines need a project to file their tasks in, so without one the company manages none. */
+export const managedRoutines = (config: GateConfig) => (config.projectId ? config.routines : []);
 
 export const isRoutineKey = (value: unknown): value is RoutineKey => ROUTINES.some((r) => r.key === value);
 
