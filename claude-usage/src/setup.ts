@@ -18,4 +18,6 @@ export interface Setup {
   /** Time zone of the routines' cron expressions. */
   timezone: string;
   routines: RoutineSetup[];
+  /** Log a warning for every company whose plugin settings can't be read, not only the setup.json company. */
+  warnForMissingCompanySetting: boolean;
 }

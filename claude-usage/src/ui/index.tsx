@@ -63,7 +63,7 @@ type GateView = {
   routines: Array<{ key: string; title: string; enabled: boolean; status: string | null; pausedByGate: boolean }>;
 };
 
-function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }) {
+function GateSettings({ gate, refresh, companyId }: { gate: GateView; refresh: () => void; companyId: string | null }) {
   const setRoutineEnabled = usePluginAction("setRoutineEnabled");
   const setPauseAtPercent = usePluginAction("setPauseAtPercent");
   const setWeekPauseAtPercent = usePluginAction("setWeekPauseAtPercent");
@@ -97,7 +97,7 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
           <input type="number" min={1} max={100} value={percent} disabled={busy}
             onChange={(e) => setPercent(e.target.value)}
             onBlur={() => {
-              if (Number(percent) !== gate.pauseAtPercent) void save(() => setPauseAtPercent({ percent: Number(percent) }));
+              if (Number(percent) !== gate.pauseAtPercent) void save(() => setPauseAtPercent({ companyId, percent: Number(percent) }));
             }}
             style={{ width: 56, padding: "2px 6px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)" }} />
           %
@@ -109,7 +109,7 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
           <input type="number" min={1} max={100} value={weekPercent} disabled={busy}
             onChange={(e) => setWeekPercent(e.target.value)}
             onBlur={() => {
-              if (Number(weekPercent) !== gate.weekPauseAtPercent) void save(() => setWeekPauseAtPercent({ percent: Number(weekPercent) }));
+              if (Number(weekPercent) !== gate.weekPauseAtPercent) void save(() => setWeekPauseAtPercent({ companyId, percent: Number(weekPercent) }));
             }}
             style={{ width: 56, padding: "2px 6px", fontSize: 13, borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)" }} />
           %
@@ -120,13 +120,19 @@ function GateSettings({ gate, refresh }: { gate: GateView; refresh: () => void }
           <input type="checkbox" checked={r.enabled} disabled={busy}
             onChange={(e) => {
               const enabled = e.target.checked;
-              void save(() => setRoutineEnabled({ key: r.key, enabled }));
+              void save(() => setRoutineEnabled({ companyId, key: r.key, enabled }));
             }} />
           <span style={{ flex: 1 }}>{r.title}</span>
           {r.status === "paused" ? <span style={muted}>{r.pausedByGate ? "Paused by usage" : "Paused"}</span> : null}
         </label>
       ))}
-      <div style={muted}>Checked routines pause when 5-hour or weekly usage reaches its limit, and resume when it drops. The watchdog uses the same limits.</div>
+      <div style={muted}>
+        {gate.routines.length
+          ? "Checked routines pause when 5-hour or weekly usage reaches its limit, and resume when it drops. The watchdog uses the same limits."
+          : companyId
+            ? "No routines are set up for this company. Add them in the plugin settings."
+            : "Open a company to choose which of its routines pause."}
+      </div>
     </div>
   );
 }
@@ -143,9 +149,9 @@ function useNarrow() {
   return narrow;
 }
 
-export function ClaudeUsageButton(_props: PluginWidgetProps) {
+export function ClaudeUsageButton({ context }: PluginWidgetProps) {
   const { data, error, refresh } = usePluginData<UsageResult>("usage");
-  const gate = usePluginData<GateView>("gate");
+  const gate = usePluginData<GateView>("gate", { companyId: context.companyId });
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const narrow = useNarrow();
@@ -208,7 +214,7 @@ export function ClaudeUsageButton(_props: PluginWidgetProps) {
               {new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
             </div>
           ) : null}
-          {gate.data ? <GateSettings gate={gate.data} refresh={gate.refresh} /> : null}
+          {gate.data ? <GateSettings gate={gate.data} refresh={gate.refresh} companyId={context.companyId} /> : null}
           {gate.error ? <p role="alert" style={{ ...muted, margin: 0 }}>{gate.error.message}</p> : null}
         </div>
       ) : null}
